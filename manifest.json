@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "ssandys.headway",
+  "name": "Headway",
+  "version": "0.1.0",
+  "author": "Sean Sandys",
+  "license": "MIT",
+  "description": "Next-train countdowns for saved NYC subway stations, with service alerts for the routes you ride. Summon with: omarchy-shell shell toggle ssandys.headway",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Headway",
+    "description": "NYC subway arrivals and service alerts for your saved stations",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pollIntervalOpenSec": 30,
+      "pollIntervalIdleSec": 90,
+      "alertsIntervalSec": 300,
+      "staleAfterSec": 180,
+      "trainsPerDirection": 3,
+      "notifyRouteAlert": true,
+      "notifyFeedStale": true
+    },
+    "schema": [
+      { "key": "pollIntervalOpenSec", "type": "integer", "label": "Poll interval while the panel is open (seconds)", "min": 10, "max": 120, "step": 5, "defaultValue": 30 },
+      { "key": "pollIntervalIdleSec", "type": "integer", "label": "Poll interval while idle (seconds)", "min": 30, "max": 600, "step": 10, "defaultValue": 90 },
+      { "key": "alertsIntervalSec", "type": "integer", "label": "Service alert refresh interval (seconds)", "min": 60, "max": 1800, "step": 60, "defaultValue": 300 },
+      { "key": "staleAfterSec", "type": "integer", "label": "Treat data as stale after (seconds)", "min": 60, "max": 900, "step": 30, "defaultValue": 180 },
+      { "key": "trainsPerDirection", "type": "integer", "label": "Arrivals to list per direction", "min": 1, "max": 6, "step": 1, "defaultValue": 3 },
+      { "key": "notifyRouteAlert", "type": "boolean", "label": "Notify on a new alert for a saved route", "defaultValue": true },
+      { "key": "notifyFeedStale", "type": "boolean", "label": "Notify when the feed goes stale or unreachable", "defaultValue": true }
+    ]
+  }
+}

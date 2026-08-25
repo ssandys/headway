@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Run every test suite.
+set -euo pipefail
+shopt -s nullglob
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SRC"
+
+echo "== manifest =="
+jq -e . manifest.json >/dev/null && echo "  valid json"
+
+echo "== bash syntax =="
+# Globbed, not named. A by-name list silently omits every script added later.
+bash -n bin/*
+echo "  ok"
+
+echo "== qml syntax =="
+# qmllint catches parse errors ONLY. It does NOT resolve Quickshell/omarchy
+# imports, so unknown components and bad property references still pass. Treat
+# this as "the file parses", not "the QML is correct".
+if command -v qmllint >/dev/null 2>&1; then
+  for qml in *.qml; do
+    [ -e "$qml" ] || continue
+    qmllint "$qml" || { echo "  qmllint failed on $qml"; exit 1; }
+  done
+  echo "  ok"
+else
+  echo "  qmllint not installed, skipped"
+fi
+
+echo "== javascript =="
+# Auto-discovery finds tests/*.test.js. Bare form is used because passing an empty
+# directory as an argument throws MODULE_NOT_FOUND in Node.js.
+js_rc=0
+node --test || js_rc=$?
+if [ "$js_rc" -ne 0 ]; then
+  echo "FAILED: javascript=$js_rc" >&2
+  exit 1
+fi
