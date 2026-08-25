@@ -16,6 +16,13 @@ function readVarint(bytes, pos) {
   var value = 0
   var scale = 1
   for (;;) {
+    // Without this guard, reading past the end yields `undefined`, and
+    // `undefined & 0x80` is 0 -- so EOF reads as a valid terminator and the
+    // function returns a plausible-looking wrong number instead of failing.
+    // A truncated HTTP response is a realistic input here.
+    if (pos >= bytes.length) {
+      throw new Error("gtfs: varint runs past the end of the buffer")
+    }
     var b = bytes[pos]
     pos = pos + 1
     value = value + (b & 0x7f) * scale
@@ -42,12 +49,24 @@ function walkFields(bytes, start, end, visit) {
       var lp = readVarint(bytes, pos)
       pos = lp[1]
       var stop = pos + lp[0]
+      // A declared length longer than the remaining buffer would otherwise
+      // hand the caller a range past the end, and every nested decode built
+      // on it would read garbage without ever erroring.
+      if (stop > end) {
+        throw new Error("gtfs: length-delimited field runs past the end of the buffer")
+      }
       visit(field, wire, 0, pos, stop)
       pos = stop
     } else if (wire === 5) {
+      if (pos + 4 > end) {
+        throw new Error("gtfs: fixed32 field runs past the end of the buffer")
+      }
       visit(field, wire, 0, -1, -1)
       pos = pos + 4
     } else if (wire === 1) {
+      if (pos + 8 > end) {
+        throw new Error("gtfs: fixed64 field runs past the end of the buffer")
+      }
       visit(field, wire, 0, -1, -1)
       pos = pos + 8
     } else {
