@@ -222,6 +222,78 @@ function decodeTripUpdates(bytes) {
   return result
 }
 
+// Alert.active_period=1 (TimeRange.start=1, end=2), informed_entity=5
+// (EntitySelector.route_id=2), header_text=10 (TranslatedString.translation=1,
+// Translation.text=1), and the MTA Mercury extension at 1001 whose sub-field 3
+// is alert_type.
+//
+// Alert.effect(7) and Alert.cause(6) are NOT read: they are populated on zero
+// alerts in practice, and a severity rule built on them never fires.
+var MERCURY_EXT = 1001
+var MERCURY_ALERT_TYPE = 3
+
+function decodeAlert(bytes, start, end) {
+  var headerText = ""
+  var alertType = ""
+  var routes = []
+  var periods = []
+  walkFields(bytes, start, end, function (f, w, v, s, e) {
+    if (f === 1 && w === 2) {
+      var period = { start: 0, end: 0 }
+      walkFields(bytes, s, e, function (pf, pw, pv) {
+        if (pf === 1 && pw === 0) period.start = pv
+        else if (pf === 2 && pw === 0) period.end = pv
+      })
+      periods.push(period)
+    } else if (f === 5 && w === 2) {
+      walkFields(bytes, s, e, function (sf, sw, sv, ss, se) {
+        if (sf !== 2 || sw !== 2) return
+        var route = utf8(bytes, ss, se)
+        if (routes.indexOf(route) < 0) routes.push(route)
+      })
+    } else if (f === 10 && w === 2 && !headerText) {
+      walkFields(bytes, s, e, function (tf, tw, tv, ts, te) {
+        if (tf !== 1 || tw !== 2) return
+        walkFields(bytes, ts, te, function (nf, nw, nv, ns, ne) {
+          if (nf === 1 && nw === 2 && !headerText) headerText = utf8(bytes, ns, ne)
+        })
+      })
+    } else if (f === MERCURY_EXT && w === 2) {
+      walkFields(bytes, s, e, function (mf, mw, mv, ms, me) {
+        if (mf === MERCURY_ALERT_TYPE && mw === 2) alertType = utf8(bytes, ms, me)
+      })
+    }
+  })
+  return {
+    headerText: headerText, alertType: alertType,
+    routes: routes, periods: periods
+  }
+}
+
+function decodeAlerts(bytes) {
+  var result = { timestamp: 0, alerts: [] }
+  if (!bytes || bytes.length === 0) return result
+  walkFields(bytes, 0, bytes.length, function (f, w, v, s, e) {
+    if (f === 1 && w === 2) {
+      walkFields(bytes, s, e, function (hf, hw, hv) {
+        if (hf === 3 && hw === 0) result.timestamp = hv
+      })
+    } else if (f === 2 && w === 2) {
+      var id = ""
+      var body = null
+      walkFields(bytes, s, e, function (ef, ew, ev, es, ee) {
+        if (ef === 1 && ew === 2) id = utf8(bytes, es, ee)
+        else if (ef === 5 && ew === 2) body = [es, ee]
+      })
+      if (!body) return
+      var alert = decodeAlert(bytes, body[0], body[1])
+      alert.id = id
+      result.alerts.push(alert)
+    }
+  })
+  return result
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readVarint: readVarint,
@@ -232,6 +304,7 @@ if (typeof module !== "undefined") {
     feedsForRoutes: feedsForRoutes,
     feedUrl: feedUrl,
     ALERTS_URL: ALERTS_URL,
-    decodeTripUpdates: decodeTripUpdates
+    decodeTripUpdates: decodeTripUpdates,
+    decodeAlerts: decodeAlerts
   }
 }

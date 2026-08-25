@@ -220,3 +220,54 @@ test("decodeTripUpdates skips a stop_time_update with neither time", () => {
   assert.equal(feed.trips.length, 1)
   assert.deepEqual(feed.trips[0].stops, [])
 })
+
+test("decodeAlerts reads every alert with text and routes", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  assert.ok(feed.alerts.length > 0, "the alerts feed decoded at least one alert")
+  // The guard here is per-alert structure, not a count threshold. A magic
+  // number like "> 50" fails on a quiet day for reasons that have nothing to
+  // do with the decoder, and passes a decoder that mangles every field.
+  for (const a of feed.alerts) {
+    assert.equal(typeof a.id, "string")
+    assert.ok(a.id.length > 0, "every alert has a non-empty entity id")
+    assert.ok(a.headerText.length > 0, "every alert carries header text")
+  }
+})
+
+test("decodeAlerts extracts alert_type from the Mercury extension", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const typed = feed.alerts.filter((a) => a.alertType)
+  assert.equal(typed.length, feed.alerts.length,
+    "every alert carries a Mercury alert_type")
+})
+
+test("decodeAlerts sees the Planned- prefix that keeps the glyph calm", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const planned = feed.alerts.filter((a) => a.alertType.indexOf("Planned - ") === 0)
+  assert.ok(planned.length > 0, "planned work is present and marked")
+})
+
+test("decodeAlerts collects informed route ids", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const withRoutes = feed.alerts.filter((a) => a.routes.length > 0)
+  assert.ok(withRoutes.length > 0)
+  for (const r of withRoutes[0].routes) assert.equal(typeof r, "string")
+})
+
+test("decodeAlerts deduplicates repeated route ids on one alert", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  for (const a of feed.alerts) {
+    assert.equal(a.routes.length, new Set(a.routes).size, "no duplicate routes")
+  }
+})
+
+test("decodeAlerts reads active_period ranges", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const withPeriod = feed.alerts.filter((a) => a.periods.length > 0)
+  assert.ok(withPeriod.length > 0, "alerts carry active periods")
+  assert.ok(withPeriod[0].periods[0].start > 1700000000)
+})
+
+test("decodeAlerts tolerates an empty buffer", () => {
+  assert.deepEqual(Gtfs.decodeAlerts(new Uint8Array(0)), { timestamp: 0, alerts: [] })
+})
