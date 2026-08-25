@@ -1,6 +1,8 @@
 // tests/gtfs.test.js
 const test = require("node:test")
 const assert = require("node:assert/strict")
+const { readFileSync } = require("node:fs")
+const { join } = require("node:path")
 
 const Gtfs = require("../Gtfs.js")
 
@@ -162,4 +164,59 @@ test("ALERTS_URL points at the protobuf variant, not the json one", () => {
   assert.equal(
     Gtfs.ALERTS_URL,
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts")
+})
+
+const fixture = (name) =>
+  new Uint8Array(readFileSync(join(__dirname, "fixtures", name)))
+
+test("decodeTripUpdates reads the feed header timestamp", () => {
+  const feed = Gtfs.decodeTripUpdates(fixture("gtfs-l.pb"))
+  assert.ok(feed.timestamp > 1700000000, "timestamp is a plausible epoch")
+  assert.ok(feed.timestamp < 4000000000, "timestamp was not truncated to 32 bits")
+})
+
+test("decodeTripUpdates returns trips with route and stops", () => {
+  const feed = Gtfs.decodeTripUpdates(fixture("gtfs-l.pb"))
+  assert.ok(feed.trips.length > 0, "the L feed has trips")
+  const trip = feed.trips[0]
+  assert.equal(typeof trip.tripId, "string")
+  assert.equal(trip.routeId, "L")
+  assert.ok(trip.stops.length > 0)
+  assert.match(trip.stops[0].stopId, /^L\d+[NS]$/)
+  assert.ok(trip.stops[0].time > 1700000000)
+})
+
+test("decodeTripUpdates yields only route ids the feed's vocabulary allows", () => {
+  const feed = Gtfs.decodeTripUpdates(fixture("gtfs.pb"))
+  const ids = new Set(feed.trips.map((t) => t.routeId))
+  assert.ok(ids.size > 0, "the numbered feed yields routes")
+  for (const id of ids) assert.match(id, /^[1-7]X?$|^GS$/)
+})
+// Note what this case deliberately does NOT assert: that 6X or 7X is present.
+// Expresses run only at certain hours and this fixture is captured live, so
+// requiring them would make the suite pass or fail on the time of day someone
+// happened to run capture-fixtures.sh. That express ids are *handled* is
+// verified deterministically in Model.js's tests against a synthetic 6X trip.
+// What this case guards is narrower and always true: the decoder never invents
+// a route id outside the feed's known vocabulary.
+
+test("decodeTripUpdates tolerates an empty buffer", () => {
+  const feed = Gtfs.decodeTripUpdates(new Uint8Array(0))
+  assert.deepEqual(feed, { timestamp: 0, trips: [] })
+})
+
+test("decodeTripUpdates skips a stop_time_update with neither time", () => {
+  // FeedMessage.entity(2) > FeedEntity.trip_update(3) > TripUpdate:
+  //   trip(1) { route_id(5) = "L" }, stop_time_update(2) { stop_id(4) = "L08N" }
+  // The stop carries no arrival(2) and no departure(3), so it must be dropped.
+  const trip = [0x2a, 0x01, 0x4c]                       // field 5, len 1, "L"
+  const tripMsg = [0x0a, trip.length].concat(trip)      // TripUpdate.trip = 1
+  const stop = [0x22, 0x04, 0x4c, 0x30, 0x38, 0x4e]     // field 4, len 4, "L08N"
+  const stopMsg = [0x12, stop.length].concat(stop)      // TripUpdate.stop_time_update = 2
+  const tu = tripMsg.concat(stopMsg)
+  const tuMsg = [0x1a, tu.length].concat(tu)            // FeedEntity.trip_update = 3
+  const ent = [0x12, tuMsg.length].concat(tuMsg)        // FeedMessage.entity = 2
+  const feed = Gtfs.decodeTripUpdates(new Uint8Array(ent))
+  assert.equal(feed.trips.length, 1)
+  assert.deepEqual(feed.trips[0].stops, [])
 })

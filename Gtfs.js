@@ -151,6 +151,77 @@ function feedUrl(feed) {
   return FEED_BASE + "nyct%2F" + feed
 }
 
+// Field numbers, confirmed against live NYCT output:
+//   FeedMessage.header=1 (FeedHeader.timestamp=3), FeedMessage.entity=2
+//   FeedEntity.trip_update=3, FeedEntity.alert=5
+//   TripUpdate.trip=1 (TripDescriptor.trip_id=1, route_id=5)
+//   TripUpdate.stop_time_update=2
+//   StopTimeUpdate.arrival=2, departure=3, stop_id=4
+//   StopTimeEvent.time=2
+// Every unrecognised field -- including the whole NYCT extension block -- is
+// skipped by walkFields, so an upstream addition cannot break this decoder.
+function decodeStopTimeEvent(bytes, start, end) {
+  var time = 0
+  walkFields(bytes, start, end, function (f, w, v) {
+    if (f === 2 && w === 0) time = v
+  })
+  return time
+}
+
+function decodeStopTimeUpdate(bytes, start, end) {
+  var stopId = ""
+  var arrival = 0
+  var departure = 0
+  walkFields(bytes, start, end, function (f, w, v, s, e) {
+    if (f === 4 && w === 2) stopId = utf8(bytes, s, e)
+    else if (f === 2 && w === 2) arrival = decodeStopTimeEvent(bytes, s, e)
+    else if (f === 3 && w === 2) departure = decodeStopTimeEvent(bytes, s, e)
+  })
+  // Riders board at departure; fall back to arrival, which is all a terminal
+  // arrival carries. A stop with neither is not a boarding opportunity.
+  var time = departure > 0 ? departure : arrival
+  if (!stopId || time <= 0) return null
+  return { stopId: stopId, time: time }
+}
+
+function decodeTripUpdate(bytes, start, end) {
+  var tripId = ""
+  var routeId = ""
+  var stops = []
+  walkFields(bytes, start, end, function (f, w, v, s, e) {
+    if (f === 1 && w === 2) {
+      walkFields(bytes, s, e, function (df, dw, dv, ds, de) {
+        if (df === 1 && dw === 2) tripId = utf8(bytes, ds, de)
+        else if (df === 5 && dw === 2) routeId = utf8(bytes, ds, de)
+      })
+    } else if (f === 2 && w === 2) {
+      var stop = decodeStopTimeUpdate(bytes, s, e)
+      if (stop) stops.push(stop)
+    }
+  })
+  if (!routeId) return null
+  return { tripId: tripId, routeId: routeId, stops: stops }
+}
+
+function decodeTripUpdates(bytes) {
+  var result = { timestamp: 0, trips: [] }
+  if (!bytes || bytes.length === 0) return result
+  walkFields(bytes, 0, bytes.length, function (f, w, v, s, e) {
+    if (f === 1 && w === 2) {
+      walkFields(bytes, s, e, function (hf, hw, hv) {
+        if (hf === 3 && hw === 0) result.timestamp = hv
+      })
+    } else if (f === 2 && w === 2) {
+      walkFields(bytes, s, e, function (ef, ew, ev, es, ee) {
+        if (ef !== 3 || ew !== 2) return
+        var trip = decodeTripUpdate(bytes, es, ee)
+        if (trip) result.trips.push(trip)
+      })
+    }
+  })
+  return result
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readVarint: readVarint,
@@ -160,6 +231,7 @@ if (typeof module !== "undefined") {
     normalizeRoute: normalizeRoute,
     feedsForRoutes: feedsForRoutes,
     feedUrl: feedUrl,
-    ALERTS_URL: ALERTS_URL
+    ALERTS_URL: ALERTS_URL,
+    decodeTripUpdates: decodeTripUpdates
   }
 }
