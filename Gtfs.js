@@ -101,10 +101,65 @@ function utf8(bytes, start, end) {
   return out
 }
 
+var FEED_BASE = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/"
+var ALERTS_URL = FEED_BASE + "camsys%2Fsubway-alerts"
+
+// Verified by decoding every feed and collecting the route_ids it actually
+// emits -- not from any document, which is how the shuttle placements were
+// settled. Express variants (6X, 7X) are separate ids in the feed and are
+// deliberately absent here: feedsForRoutes normalizes before lookup.
+var FEEDS = {
+  "gtfs": ["1", "2", "3", "4", "5", "6", "7", "GS"],
+  "gtfs-ace": ["A", "C", "E", "H"],
+  "gtfs-bdfm": ["B", "D", "F", "M", "FS"],
+  "gtfs-g": ["G"],
+  "gtfs-jz": ["J", "Z"],
+  "gtfs-nqrw": ["N", "Q", "R", "W"],
+  "gtfs-l": ["L"],
+  "gtfs-si": ["SI"]
+}
+
+// "6X" -> "6". The suffix rule requires a longer id, so a hypothetical route
+// literally named "X" is left intact rather than normalized to "".
+function normalizeRoute(id) {
+  if (!id) return ""
+  if (id.length > 1 && id.charAt(id.length - 1) === "X") {
+    return id.substring(0, id.length - 1)
+  }
+  return id
+}
+
+// Only the feeds covering the given routes. Riding the L means fetching 23 KB
+// rather than the 636 KB of all eight.
+function feedsForRoutes(routes) {
+  var wanted = []
+  var i, j
+  for (i = 0; i < routes.length; i++) {
+    var route = normalizeRoute(routes[i])
+    for (var feed in FEEDS) {
+      if (!FEEDS.hasOwnProperty(feed)) continue
+      if (FEEDS[feed].indexOf(route) < 0) continue
+      var already = false
+      for (j = 0; j < wanted.length; j++) if (wanted[j] === feed) already = true
+      if (!already) wanted.push(feed)
+    }
+  }
+  return wanted
+}
+
+function feedUrl(feed) {
+  return FEED_BASE + "nyct%2F" + feed
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readVarint: readVarint,
     walkFields: walkFields,
-    utf8: utf8
+    utf8: utf8,
+    FEEDS: FEEDS,
+    normalizeRoute: normalizeRoute,
+    feedsForRoutes: feedsForRoutes,
+    feedUrl: feedUrl,
+    ALERTS_URL: ALERTS_URL
   }
 }

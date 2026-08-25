@@ -105,3 +105,61 @@ test("utf8 decodes a 4-byte (astral) sequence", () => {
   assert.equal(decoded.codePointAt(0), 0xF0BA4)
   assert.equal(decoded.length, 2, "an astral char is two UTF-16 units")
 })
+
+test("FEEDS covers all eight subway feeds", () => {
+  assert.equal(Object.keys(Gtfs.FEEDS).length, 8)
+})
+
+test("shuttles are on their verified feeds", () => {
+  assert.ok(Gtfs.FEEDS["gtfs"].indexOf("GS") >= 0, "GS is on gtfs")
+  assert.ok(Gtfs.FEEDS["gtfs-ace"].indexOf("H") >= 0, "H is on gtfs-ace")
+  assert.ok(Gtfs.FEEDS["gtfs-bdfm"].indexOf("FS") >= 0, "FS is on gtfs-bdfm")
+})
+
+test("Staten Island's route id is SI, not SIR", () => {
+  assert.deepEqual(Gtfs.FEEDS["gtfs-si"], ["SI"])
+})
+
+test("normalizeRoute strips the express suffix", () => {
+  assert.equal(Gtfs.normalizeRoute("6X"), "6")
+  assert.equal(Gtfs.normalizeRoute("7X"), "7")
+})
+
+test("normalizeRoute leaves ordinary routes alone", () => {
+  assert.equal(Gtfs.normalizeRoute("6"), "6")
+  assert.equal(Gtfs.normalizeRoute("L"), "L")
+})
+
+test("normalizeRoute does not mangle a route legitimately ending in X", () => {
+  // No such route exists today, but the rule must be suffix-on-a-longer-id,
+  // never "any id containing X" -- a single-character "X" stays "X".
+  assert.equal(Gtfs.normalizeRoute("X"), "X")
+})
+
+test("feedsForRoutes picks only the feeds needed", () => {
+  assert.deepEqual(Gtfs.feedsForRoutes(["L"]), ["gtfs-l"])
+})
+
+test("feedsForRoutes returns each feed once for routes sharing it", () => {
+  assert.deepEqual(Gtfs.feedsForRoutes(["N", "Q"]), ["gtfs-nqrw"])
+})
+
+test("feedsForRoutes resolves an express id to its parent feed", () => {
+  assert.deepEqual(Gtfs.feedsForRoutes(["6X"]), ["gtfs"])
+})
+
+test("feedsForRoutes ignores an unknown route rather than throwing", () => {
+  assert.deepEqual(Gtfs.feedsForRoutes(["ZZZ"]), [])
+})
+
+test("feedUrl builds the encoded nyct path", () => {
+  assert.equal(
+    Gtfs.feedUrl("gtfs-l"),
+    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l")
+})
+
+test("ALERTS_URL points at the protobuf variant, not the json one", () => {
+  assert.equal(
+    Gtfs.ALERTS_URL,
+    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts")
+})
