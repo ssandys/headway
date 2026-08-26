@@ -160,6 +160,19 @@ test("an unrecognised alert type is info, never red", () => {
   assert.equal(Model.classifyAlert(""), "info")
 })
 
+test("a non-string alert type degrades to info rather than throwing", () => {
+  // classifyAlert sits under worstAlertClass, which sits under barState,
+  // which is read by a QML property binding. A throw there removes the whole
+  // bar; a misclassification only degrades one alert row. Its two siblings
+  // (alertIsActive, alertsFor) already tolerate malformed input, so this one
+  // must too. Unreachable from the decoder today — every alertType it emits
+  // is a string — which is exactly why it needs a test rather than trust.
+  for (const bad of [42, true, {}, [], 0.5]) {
+    assert.equal(Model.classifyAlert(bad), "info",
+      `classifyAlert(${JSON.stringify(bad)}) must not throw`)
+  }
+})
+
 test("an Object.prototype member as an alert type is info, never red", () => {
   // The severity tables are plain objects, so a bare `TABLE[alertType]`
   // lookup walks the prototype chain and returns a truthy inherited member

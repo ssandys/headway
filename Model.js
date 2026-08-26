@@ -112,7 +112,14 @@ var ALERT_AMBER = { "Delays": true, "Reduced Service": true }
 var PLANNED_PREFIX = "Planned - "
 
 function classifyAlert(alertType) {
-  if (!alertType) return "info"
+  // A typeof check, not merely a falsy guard. `alertType` arrives from the
+  // decoder, and any truthy non-string makes `.substring` throw — a throw
+  // that escapes through worstAlertClass and barState into a QML property
+  // binding, taking out the WHOLE BAR rather than one alert row. A
+  // misclassification degrades one row; an exception removes the widget.
+  // alertIsActive and alertsFor already degrade gracefully on malformed
+  // input; this was the only function in the file that did not.
+  if (typeof alertType !== "string" || !alertType) return "info"
   if (alertType.substring(0, PLANNED_PREFIX.length) === PLANNED_PREFIX) return "planned"
   // hasOwnProperty, NOT a bare lookup. `ALERT_RED[alertType]` walks the
   // prototype chain, so an alertType of "constructor", "toString" or
