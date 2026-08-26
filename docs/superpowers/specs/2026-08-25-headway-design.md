@@ -53,11 +53,21 @@ engine can do the whole job itself (see Verified findings 1 and 2).
 
 Dropping the interpreter buys:
 
-- **A one-command install.** No `omarchy pkg add` prerequisite of any kind.
+- **A one-command install, with no language runtime to obtain.**
   `python3` would have been free — `uwsm` pulls it in, so every Omarchy box
   has it — but Ruby, the preferred alternative, is not in `base` and would
   have cost a 17 MiB prerequisite plus live version skew (this machine
   carries both mise 3.3.6 and pacman 3.4.10).
+
+  Stated precisely, because an earlier draft of this line claimed "no
+  `omarchy pkg add` prerequisite of any kind" and that is false:
+  `Service.qml` spawns `notify-send`, and `libnotify` is in neither `base`
+  nor `base-devel`. It arrives as a dependency of other desktop software, so
+  it is near-universal but not guaranteed, and both sibling plugins list it.
+  What dropping the interpreter actually buys is narrower and still worth
+  having: no language runtime, no version skew, no pip or npm packages, and
+  no credential. A missing `notify-send` degrades gracefully — notifications
+  silently do not appear, the widget is otherwise unaffected.
 - **The death of trap #12.** With no Python/JS boundary there are no values
   hand-duplicated across languages to drift silently apart. `colophon`'s
   `tests/test_cross_language.py` shrinks here to a single manifest-versus-
