@@ -79,11 +79,12 @@ opening anything.
 | Key / action | Effect |
 |---|---|
 | `r` | Refresh now |
-| `Esc` | Close the panel — or, while the search box has focus, leave the box |
+| `Esc` | Close the panel — or, while the search box has focus, clear the search and leave the box |
 | Click a saved station's name | Make it the active station |
 | Click a saved station's `✕` | Remove it |
 | Type in the search box | Filter all 496 stations by name |
-| Click a direction button on a result | Save that station with that direction, and make it active |
+| Click a route bullet on a result | Include or exclude that route for the station you are about to save |
+| Click a direction button on a result | Save that station with the selected routes and that direction, and make it active |
 
 The panel shows, top to bottom: the active station and its direction filter;
 the next few arrivals, each with a coloured route bullet, its destination and a
@@ -93,6 +94,14 @@ search box.
 **Route bullets follow the MTA's colours,** and an express train gets a diamond
 where a local gets a disc. Colour means *identity* here and never severity —
 the bar is where severity lives.
+
+**On a search result the bullets are also the route filter.** Every route starts
+selected; click one to drop it, click it again to bring it back. Dimmed means
+excluded. So at 14 St-Union Sq you can save just the 6, Downtown, rather than
+the next of anything across seven routes — which at a large interchange is not a
+number anyone can plan around. Ignoring the bullets saves every route the
+station serves, which is the sensible default. You cannot deselect the last
+one: a station with no routes could never show an arrival.
 
 **Search results are ordered nearest-first** using the location Omarchy already
 knows, read from `~/.local/state/omarchy/settings/weather.json`. Distances show

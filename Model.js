@@ -258,6 +258,30 @@ function formatCountdown(etaSec) {
 // exactly the state that matters most. The panel's arrival rows keep the word,
 // where there is room for it and it reads better than a symbol. Collapsing
 // these two back into one function reintroduces the clipping.
+// The per-station route filter. Returns the selection with `route` toggled,
+// rebuilt in the STATION's own route order rather than appended -- so
+// deselecting the 5 at Union Sq and putting it back gives 4,5,6 again and not
+// 4,6,5, and the bullets never reshuffle under the cursor.
+//
+// Never returns empty. A saved station with no routes can never produce an
+// arrival, so the widget would sit blank with nothing explaining why;
+// deselecting the last route is a no-op instead of a reachable dead state.
+function toggleRoute(all, picked, route) {
+  var table = all || []
+  var current = picked || []
+  var next = []
+  for (var i = 0; i < table.length; i++) {
+    var isTarget = table[i] === route
+    var wasIn = false
+    for (var j = 0; j < current.length; j++) {
+      if (current[j] === table[i]) { wasIn = true; break }
+    }
+    if (isTarget ? !wasIn : wasIn) next.push(table[i])
+  }
+  if (next.length === 0) return current
+  return next
+}
+
 // The panel header's right-hand slot. Kept here rather than inline in the QML
 // so the wording and the stale boundary are unit-tested -- the same reason
 // barState and tooltipText live in this file.
@@ -382,6 +406,7 @@ if (typeof module !== "undefined") {
     badgeText: badgeText,
     feedAgeText: feedAgeText,
     distanceText: distanceText,
+    toggleRoute: toggleRoute,
     directionLabelOf: directionLabelOf,
     barState: barState,
     tooltipText: tooltipText

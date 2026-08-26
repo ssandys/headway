@@ -19,6 +19,19 @@ Item {
   property string fontFamily: Style.font.family
   property real diameter: Style.font.body * 1.5
 
+  // Interaction is OPT-IN. The arrival rows and the saved list want a plain
+  // indicator, and a MouseArea there would swallow clicks meant for the row
+  // beneath it -- the saved list's own row is a click target. Only the search
+  // results turn this on.
+  property bool interactive: false
+  property bool selected: true
+  signal toggled()
+
+  // Deselected reads as dimmed rather than hidden: the station still serves
+  // that route, and a bullet that vanished would make the row's route set look
+  // wrong rather than filtered.
+  opacity: root.selected ? 1.0 : 0.28
+
   implicitWidth: diameter
   implicitHeight: diameter
 
@@ -50,5 +63,16 @@ Item {
     // The smallest text this widget draws, where hinting matters most -- the
     // same reason WidgetButton's own label uses it.
     renderType: Text.NativeRendering
+  }
+
+  MouseArea {
+    anchors.fill: parent
+    // Both guards: `enabled` alone still leaves the item accepting hover, and
+    // an always-present MouseArea over a bullet in the saved list would eat
+    // the click that activates the station.
+    enabled: root.interactive
+    visible: root.interactive
+    cursorShape: Qt.PointingHandCursor
+    onClicked: root.toggled()
   }
 }

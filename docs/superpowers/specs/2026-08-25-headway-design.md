@@ -137,6 +137,23 @@ panel's title and no longer falls back to the word "Headway".
 **Saving a station from search makes it active.** Recorded in the Panel
 sections below.
 
+**The per-station route filter was missing, and was built.** The final
+whole-branch review found that the Decisions table's "Route scope" row was never
+implemented: search offered direction buttons only, and `saveStation` received
+the station's entire `daytime_routes`. The spec's own motivating example was
+therefore the case that did not work -- saving Union Sq watched every route
+serving it. This was not a decision anyone made; it is absent from this section
+because nobody noticed, and the README advertised it regardless.
+
+It is now the search result's route bullets: every route starts selected,
+clicking one excludes it, dimmed means excluded, and the direction button saves
+the selection. `Model.toggleRoute` owns the rules -- the station's own route
+order is preserved so bullets never reshuffle under the cursor, and an empty
+selection is unreachable, because a station with no routes can never produce an
+arrival and the widget would sit blank with nothing explaining why. The rules
+live in `Model.js` rather than in a QML binding for the reason the layer map
+gives: a binding cannot be tested.
+
 **Distances display in miles.** `haversineKm` still returns kilometres --
 that is the natural unit for the formula and what `Stations.search` sorts on --
 and `Model.distanceText` converts for display only. `distanceText` guards

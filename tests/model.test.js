@@ -478,3 +478,32 @@ test("dedupeTrips is not fooled by a prototype-chain tripId", () => {
   assert.equal(Model.dedupeTrips([trips]).length, 3,
     "three distinct trips must survive")
 })
+
+test("toggleRoute removes and restores a route in the station's own order", () => {
+  // The per-station route filter the spec calls load-bearing. Lives here rather
+  // than in Panel.qml because the layer map says every decision worth testing
+  // belongs in a pure module -- and because order and the never-empty rule are
+  // both easy to get wrong in a binding nothing can test.
+  const all = ["4", "5", "6", "N", "Q", "R", "W", "L"]
+  assert.deepEqual(Model.toggleRoute(all, all, "5"),
+    ["4", "6", "N", "Q", "R", "W", "L"], "removes one")
+  assert.deepEqual(Model.toggleRoute(all, ["4", "6"], "5"),
+    ["4", "5", "6"], "restores it in station order, not at the end")
+  assert.deepEqual(Model.toggleRoute(all, ["L"], "4"),
+    ["4", "L"], "and keeps station order when re-adding out of sequence")
+})
+
+test("toggleRoute never yields an empty selection", () => {
+  // A saved station with no routes can never produce an arrival, so the widget
+  // would sit permanently blank with no way to tell why. Deselecting the last
+  // route has to be a no-op rather than a valid state.
+  assert.deepEqual(Model.toggleRoute(["6"], ["6"], "6"), ["6"],
+    "the last route cannot be deselected")
+  assert.deepEqual(Model.toggleRoute(["4", "6"], ["6"], "6"), ["6"],
+    "still true when the station serves more")
+})
+
+test("toggleRoute ignores a route the station does not serve", () => {
+  const all = ["4", "6"]
+  assert.deepEqual(Model.toggleRoute(all, all, "Q"), ["4", "6"])
+})

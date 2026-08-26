@@ -425,6 +425,12 @@ Panel {
         delegate: RowLayout {
           id: hit
           required property var modelData
+          // The per-station ROUTE filter, defaulting to every route the station
+          // serves -- so ignoring the bullets behaves exactly as it did before
+          // this existed. Assigning it below deliberately breaks this binding;
+          // that is what stops a selection resetting when the results array is
+          // rebuilt on the next poll.
+          property var picked: hit.modelData.routes.slice()
           Layout.fillWidth: true
           spacing: Style.space(4)
           // Split into name / bullets / place, where it used to be one string.
@@ -449,6 +455,13 @@ Panel {
               routeId: modelData
               fontFamily: root.fontFamily
               diameter: Style.font.caption * 1.4
+              // Click a bullet to include or exclude that route. Model
+              // .toggleRoute owns the rules -- station order preserved, never
+              // empty -- because those are testable and a binding is not.
+              interactive: true
+              selected: hit.picked.indexOf(modelData) >= 0
+              onToggled: hit.picked = Model.toggleRoute(hit.modelData.routes,
+                                                        hit.picked, modelData)
             }
           }
           Text {
@@ -473,9 +486,13 @@ Panel {
               fontSize: Style.font.caption
               horizontalPadding: Style.space(6)
               verticalPadding: Style.space(2)
+              // hit.picked, NOT hit.modelData.routes. Saving the whole route set
+              // is what made the spec's own motivating example fail: at Union Sq,
+              // "next train" across seven routes is not a number anyone can plan
+              // around, which is the entire reason the filter is specced.
               onClicked: service.saveStation({
                 stopId: hit.modelData.id, name: hit.modelData.name,
-                routes: hit.modelData.routes, direction: dirButton.modelData.dir
+                routes: hit.picked, direction: dirButton.modelData.dir
               })
             }
           }
