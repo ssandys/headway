@@ -103,33 +103,63 @@ Item {
     // was reverted, and the second only worked because by then the first
     // write had reached the disk.
     //
-    // The flag is CONSUMED, not latched: exactly one event is skipped per
-    // write, so a genuine external edit is still picked up by the next one.
-    // A latch would turn one failed write into permanently deaf file watching.
+    // A COUNTER, not a bool. Two writeState() calls landing before the first
+    // watcher event set one flag twice; event 1 consumed it and event 2 ran
+    // loadState() -- the exact path documented above as returning stale content
+    // and undoing a save. Clicking saved station A then B in quick succession
+    // was enough. Consumed, not latched, so a failed write still costs at most
+    // one missed external edit rather than deafening the watcher for good.
     onFileChanged: {
-      if (root.selfWrite) { root.selfWrite = false; return }
+      if (root.selfWrites > 0) { root.selfWrites = root.selfWrites - 1; return }
       root.loadState()
     }
     onLoadFailed: { root.stations = []; root.activeStationId = "" }
   }
 
-  function loadState() {
-    try {
-      var data = JSON.parse(stateFile.text())
-      root.stations = data.stations || []
-      root.activeStationId = data.activeStationId || ""
-    } catch (e) {
-      root.stations = []
-      root.activeStationId = ""
-    }
+  // Entries are VALIDATED, not trusted. headway.json is plain JSON the README
+  // invites the user to inspect, so its contents are upstream data. An entry
+  // without `routes` reaches Model.alertsFor through the barState and tooltip
+  // property bindings, and a throw in a binding removes the whole widget rather
+  // than one row. Model.worstAlertClass guards this too; both halves are wanted,
+  // and this is the half that keeps junk out of `refresh()` as well.
+  function validStation(e) {
+    if (!e || typeof e.stopId !== "string" || e.stopId === "") return false
+    if (e.direction !== "N" && e.direction !== "S") return false
+    if (!e.routes || typeof e.routes.length !== "number") return false
+    return true
   }
 
-  // Set immediately before every setText, and consumed by the first watcher
-  // event that follows it. See stateFile.onFileChanged.
-  property bool selfWrite: false
+  function loadState() {
+    var loaded = []
+    var active = ""
+    try {
+      var data = JSON.parse(stateFile.text())
+      var raw = data.stations || []
+      for (var i = 0; i < raw.length; i++) {
+        if (root.validStation(raw[i])) loaded.push(raw[i])
+      }
+      active = data.activeStationId || ""
+    } catch (e) {
+      loaded = []
+      active = ""
+    }
+    root.stations = loaded
+    root.activeStationId = active
+    // REQUIRED. The poll Timer has triggeredOnStart, so refresh() runs once at
+    // component completion -- but FileView loads asynchronously AFTER that, so
+    // that first refresh sees no saved station and early-returns. Without this
+    // call nothing re-triggers a fetch and the bar stays blank until the next
+    // idle tick, which is up to pollIntervalIdleSec (90s) after every shell
+    // start. Observed on every redeploy during development.
+    root.refresh()
+  }
+
+  // Incremented before every setText, decremented by each watcher event it
+  // causes. See stateFile.onFileChanged for why this is a count and not a flag.
+  property int selfWrites: 0
 
   function writeState() {
-    root.selfWrite = true
+    root.selfWrites = root.selfWrites + 1
     stateFile.setText(JSON.stringify({
       version: 1, activeStationId: root.activeStationId, stations: root.stations
     }, null, 2) + "\n")
@@ -139,10 +169,18 @@ Item {
 
   function saveStation(entry) {
     var next = root.stations.slice()
+    var found = false
     for (var i = 0; i < next.length; i++) {
-      if (next[i].stopId === entry.stopId) { next[i] = entry; root.stations = next; writeState(); return }
+      // Rewrite in place, then fall through to the same activate/write/refresh
+      // as an insert. The update branch used to return early, doing neither --
+      // so re-picking a saved station with a different direction wrote the file
+      // and changed nothing visible, which is the same dead click the
+      // activate-on-save amendment exists to remove. And when the station WAS
+      // already active, `saved` picked up the new direction while root.arrivals
+      // kept showing the old one for up to 90s.
+      if (next[i].stopId === entry.stopId) { next[i] = entry; found = true; break }
     }
-    next.push(entry)
+    if (!found) next.push(entry)
     root.stations = next
     // Adopt it. The spec split the gestures -- search saves, the saved list
     // activates -- but picking a station AND a direction out of search is an
@@ -314,7 +352,15 @@ Item {
     // Model.arrivalsFor throws on a null `saved`, and a throw here escapes
     // into an XHR handler.
     if (!root.saved) return
-    if (root.tripLists.length === 0) return
+    if (root.tripLists.length === 0) {
+      // checkStale() MUST run here. It is what raises the stale/unreachable
+      // notification, and it used to sit only at the bottom of this function,
+      // below this early return -- so when EVERY feed failed, tripLists was
+      // empty, this returned, and the one case the notification exists for
+      // could never fire it. Unplugging the network produced silence.
+      root.checkStale()
+      return
+    }
     // Only claim success if EVERY feed succeeded. Partial data is still worth
     // showing, so arrivals are computed either way — but `ok` stays false so
     // the bar reports the gap rather than a confident wrong answer.
@@ -464,7 +510,12 @@ Item {
     onLoaded: {
       try {
         var w = JSON.parse(weatherFile.text())
-        if (w.latitude && w.longitude) root.origin = { lat: w.latitude, lon: w.longitude }
+        // typeof, not falsy. Latitude 0 (the equator) and longitude 0 (the
+        // prime meridian) are real coordinates, and this branch is the same
+        // rule Model.distanceText already states explicitly.
+        if (typeof w.latitude === "number" && typeof w.longitude === "number") {
+          root.origin = { lat: w.latitude, lon: w.longitude }
+        }
       } catch (e) { root.origin = null }
     }
     onLoadFailed: root.origin = null

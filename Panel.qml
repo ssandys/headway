@@ -162,10 +162,11 @@ Panel {
       // textKey. There is no `onRefresh` and no `onDismiss` — an invented
       // handler name is not a compile error that qmllint can see, so it
       // fails silently at runtime and the key simply does nothing.
-      onCloseRequested: {
-        if (searchField.activeFocus) { searchField.focus = false; return }
-        root.close()
-      }
+      // No searchField branch here. `blocked` above short-circuits
+      // PanelKeyCatcher before this signal is emitted, so this only ever runs
+      // when the search box does NOT have focus. Escape while typing is handled
+      // on the field itself.
+      onCloseRequested: root.close()
       onTextKey: function (text) {
         if (text === "r") service.refresh()
       }
@@ -347,8 +348,12 @@ Panel {
           Button {
             // The routes moved out of this label into the bullets beside it.
             // The NAME stays the click target that activates the station.
+            // Falls back to the persisted name before the bare stop id.
+            // writeState stores `name` on every entry, and it was never read --
+            // so a station missing from a regenerated StationData.js would have
+            // shown a raw id like "L08" when a perfectly good name was on disk.
             text: (Stations.byId(StationData.STATIONS, savedRow.modelData.stopId)
-                   || { name: savedRow.modelData.stopId }).name
+                   || { name: savedRow.modelData.name || savedRow.modelData.stopId }).name
             onClicked: service.setActive(savedRow.modelData.stopId)
             // Compact, not Ui/Button.qml's defaults. Those are body size with
             // controlPaddingY (6, so 12px vertical), which made these rows 41px
@@ -388,6 +393,24 @@ Panel {
         // the state the results binding reads from. Assigning `text` from a
         // binding would wipe half-typed input on every poll.
         onTextEdited: root.query = searchField.text
+        // Escape is handled HERE, not in PanelKeyCatcher's onCloseRequested.
+        // PanelKeyCatcher.qml:49 does `if (blocked) return` BEFORE it emits
+        // closeRequested(), and `blocked` is bound to this field's activeFocus
+        // -- so that signal cannot fire while the box has focus, and the guard
+        // that used to sit in its handler was unreachable by construction. The
+        // event fell through to this TextField, which does not handle Escape,
+        // and keyCatcher is a SIBLING of contentColumn rather than an ancestor,
+        // so it never saw the key a second time. Net effect: Escape while
+        // typing did nothing at all, twice over, against three written
+        // contracts that said it cleared the search.
+        //
+        // Clearing `text` imperatively is safe: the rule this file follows
+        // forbids assigning `text` from a BINDING, not from a handler.
+        Keys.onEscapePressed: {
+          root.query = ""
+          searchField.text = ""
+          searchField.focus = false
+        }
         // Qt does not clear activeFocus when an item is hidden, so the key
         // catcher would keep stealing `r` and Esc. Release it explicitly.
         onVisibleChanged: if (!visible) searchField.focus = false
