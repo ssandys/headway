@@ -145,6 +145,31 @@ therefore the case that did not work -- saving Union Sq watched every route
 serving it. This was not a decision anyone made; it is absent from this section
 because nobody noticed, and the README advertised it regardless.
 
+**Notifications are primed on the first alert poll.** The alerts timer has
+`triggeredOnStart`, so every alert already active on a saved route counted as
+new at shell start and fired a notification -- a burst on every login and every
+redeploy, for alerts that had been running long before the widget started. This
+section already frames notifications as firing on the transition INTO an alert,
+and at a cold start there is no transition, only a backlog. The first poll now
+absorbs the current state silently. The alerts themselves are still shown in the
+panel; only the notification is suppressed.
+
+**Alerts are grouped and labelled by route, and the tooltip names its routes.**
+Both were specified and neither was built. The alert list rendered as a flat wall
+of unattributed sentences, which at an interchange is most of the panel;
+`Model.alertsForDisplay` now attributes each alert to a saved route and orders
+them by the rider's own route order, and each row carries a route bullet. An
+alert that cannot be attributed is kept and rendered without one, because
+dropping it would hide a real service alert to avoid an unlabelled bullet.
+
+The tooltip's specified format has always named the route, and it printed none.
+That only became fixable once the route filter existed and there was a
+meaningful subset to name -- before it, every route the station served was
+watched. It now lists all watched routes rather than the first, since naming one
+of three is a quieter kind of wrong than naming none. The separator stays `-`
+rather than the spec's `·`: the pure modules avoid non-ASCII literals for the
+reason `BAR_GLYPH` exists.
+
 **A saved row's direction is shown and switchable.** Added on request after the
 route filter landed. A saved row previously did not say which way it pointed at
 all -- the direction appeared only in the header, and only for the active

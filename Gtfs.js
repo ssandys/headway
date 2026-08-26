@@ -33,6 +33,56 @@ function readVarint(bytes, pos) {
 
 // visit(field, wire, varintValue, rangeStart, rangeEnd)
 // For wire 2, rangeStart/rangeEnd bound the payload. Otherwise both are -1.
+// Advances past one field's payload without interpreting it. Used only by
+// skipGroup -- walkFields needs the payload itself, so it does its own bounds
+// checks with field-specific messages.
+function skipValue(bytes, pos, end, wire) {
+  if (wire === 0) return readVarint(bytes, pos)[1]
+  if (wire === 1) {
+    if (pos + 8 > end) throw new Error("gtfs: fixed64 runs past the end of the buffer")
+    return pos + 8
+  }
+  if (wire === 2) {
+    var lp = readVarint(bytes, pos)
+    var stop = lp[1] + lp[0]
+    if (stop > end) {
+      throw new Error("gtfs: length-delimited field runs past the end of the buffer")
+    }
+    return stop
+  }
+  if (wire === 5) {
+    if (pos + 4 > end) throw new Error("gtfs: fixed32 runs past the end of the buffer")
+    return pos + 4
+  }
+  throw new Error("gtfs: unknown wire type " + wire)
+}
+
+// Consumes a group's body and its matching END_GROUP, returning the position
+// after it. `pos` is just past the START_GROUP tag.
+//
+// Depth-tracked rather than scanning for the first wire-4 tag: groups nest, and
+// a naive scan would stop at an inner group's terminator, leaving the outer
+// group's remaining body to be read as top-level fields.
+function skipGroup(bytes, pos, end, groupField) {
+  var depth = 1
+  while (depth > 0) {
+    if (pos >= end) {
+      throw new Error("gtfs: unterminated group for field " + groupField)
+    }
+    var tagPair = readVarint(bytes, pos)
+    pos = tagPair[1]
+    var wire = tagPair[0] % 8
+    if (wire === 3) {
+      depth = depth + 1
+    } else if (wire === 4) {
+      depth = depth - 1
+    } else {
+      pos = skipValue(bytes, pos, end, wire)
+    }
+  }
+  return pos
+}
+
 function walkFields(bytes, start, end, visit) {
   var pos = start
   while (pos < end) {
@@ -69,6 +119,22 @@ function walkFields(bytes, start, end, visit) {
       }
       visit(field, wire, 0, -1, -1)
       pos = pos + 8
+    } else if (wire === 3) {
+      // START_GROUP. Skipped whole, never handed to `visit` -- a group's payload
+      // is a tag stream rather than a byte range, so there is nothing a caller
+      // expecting (start, stop) could do with it.
+      //
+      // This branch used to throw, and Service.qml turns any decode throw into
+      // "feed unreachable" -- so ONE group-encoded field anywhere in a 233 KB
+      // feed painted the bar red for a feed that had returned 200 with
+      // perfectly good trip data. Wire 3 and 4 are legal proto2 and
+      // GTFS-Realtime IS proto2: the NYCT and Mercury extensions attach through
+      // `extend` blocks. Only 6 and 7 are genuinely invalid.
+      pos = skipGroup(bytes, pos, end, field)
+    } else if (wire === 4) {
+      // An END_GROUP with no START_GROUP. skipGroup consumes matched pairs, so
+      // reaching one here means the stream is malformed.
+      throw new Error("gtfs: unmatched END_GROUP for field " + field)
     } else {
       throw new Error("gtfs: unknown wire type " + wire)
     }
@@ -160,6 +226,11 @@ function feedUrl(feed) {
 //   StopTimeEvent.time=2
 // Every unrecognised field -- including the whole NYCT extension block -- is
 // skipped by walkFields, so an upstream addition cannot break this decoder.
+// That now holds for group-encoded fields too (wire 3/4, legal proto2, which
+// GTFS-Realtime is). It did NOT before: walkFields threw on them, and a decode
+// throw becomes "feed unreachable", so one group field would have discarded a
+// whole feed that returned 200 with good data. Only wire 6 and 7 still throw,
+// and those are genuinely invalid.
 function decodeStopTimeEvent(bytes, start, end) {
   var time = 0
   walkFields(bytes, start, end, function (f, w, v) {

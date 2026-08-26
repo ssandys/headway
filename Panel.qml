@@ -310,22 +310,37 @@ Panel {
         // anything that changes every second rebuilds every delegate every
         // second. liveAlerts is keyed on a minute-resolution clock.
         model: service.liveAlerts
-        delegate: Text {
+        delegate: RowLayout {
           id: alertRow
           required property var modelData
           Layout.fillWidth: true
-          wrapMode: Text.WordWrap
-          font.pixelSize: Style.font.caption
-          text: alertRow.modelData.headerText
-          color: {
-            var cls = Model.classifyAlert(alertRow.modelData.alertType)
-            return cls === "red" ? Model.COLOR_ERROR
-                 : cls === "amber" ? Model.COLOR_WARN
-                 : root.barForeground
+          spacing: Style.space(4)
+          readonly property string cls:
+            Model.classifyAlert(alertRow.modelData.alertType)
+
+          // The route the alert belongs to, so a list of alerts at an
+          // interchange is readable. Model.alertsForDisplay attributes and
+          // orders them; this just draws the bullet. An alert it could not
+          // attribute renders without one rather than being dropped.
+          RouteBullet {
+            visible: alertRow.modelData.matchedRoute !== ""
+            routeId: alertRow.modelData.matchedRoute
+            fontFamily: root.fontFamily
+            diameter: Style.font.caption * 1.4
+            Layout.alignment: Qt.AlignTop
           }
-          opacity: Model.classifyAlert(alertRow.modelData.alertType) === "info"
-                   || Model.classifyAlert(alertRow.modelData.alertType) === "planned"
-                   ? 0.6 : 1.0
+
+          Text {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            font.pixelSize: Style.font.caption
+            text: alertRow.modelData.headerText
+            color: alertRow.cls === "red" ? Model.COLOR_ERROR
+                 : alertRow.cls === "amber" ? Model.COLOR_WARN
+                 : root.barForeground
+            opacity: alertRow.cls === "info" || alertRow.cls === "planned"
+                     ? 0.6 : 1.0
+          }
         }
       }
 

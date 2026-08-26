@@ -170,6 +170,67 @@ function alertsFor(routes, alerts, nowSec) {
   return out
 }
 
+// The saved route an alert belongs to, or "" when it cannot be attributed.
+// Normalizes both sides, so a 6X alert lands on the 6.
+function matchedRouteOf(routes, alert) {
+  var mine = routes || []
+  var theirs = (alert && alert.routes) || []
+  for (var i = 0; i < mine.length; i++) {
+    for (var j = 0; j < theirs.length; j++) {
+      if (normalizeRoute(theirs[j]) === normalizeRoute(mine[i])) return mine[i]
+    }
+  }
+  return ""
+}
+
+// alertsFor, plus the route each alert belongs to, ordered by the rider's own
+// route order rather than the feed's.
+//
+// The spec asks for alerts grouped by route; without this they render as a flat
+// wall of unattributed sentences, which at an interchange is most of the panel.
+// It lives here rather than in a QML binding because a binding cannot be tested,
+// and because sorting inside one would rebuild the Repeater's model on every
+// evaluation.
+//
+// An alert that cannot be attributed is KEPT with an empty matchedRoute.
+// alertsFor has already filtered to saved routes, so a blank means an id shape
+// this code did not expect -- and dropping the row would hide a real service
+// alert to avoid an unlabelled bullet.
+function alertsForDisplay(routes, alerts, nowSec) {
+  var mine = routes || []
+  var live = alertsFor(mine, alerts, nowSec)
+  var out = []
+  for (var i = 0; i < live.length; i++) {
+    var a = live[i]
+    out.push({
+      id: a.id, alertType: a.alertType, headerText: a.headerText,
+      routes: a.routes, periods: a.periods,
+      matchedRoute: matchedRouteOf(mine, a)
+    })
+  }
+  out.sort(function (x, y) {
+    var xi = indexOfRoute(mine, x.matchedRoute)
+    var yi = indexOfRoute(mine, y.matchedRoute)
+    if (xi !== yi) return xi - yi
+    // Total order: V4's sort is not stable, and alert rows that swap places
+    // every minute are worse than rows in an odd order.
+    if (x.id < y.id) return -1
+    if (x.id > y.id) return 1
+    return 0
+  })
+  return out
+}
+
+// Unattributed alerts sort last, not first: a blank matchedRoute is a fallback,
+// not a category anyone is looking for.
+function indexOfRoute(routes, route) {
+  if (!route) return routes.length
+  for (var i = 0; i < routes.length; i++) {
+    if (routes[i] === route) return i
+  }
+  return routes.length
+}
+
 // md-account_tie_voice -- the conductor announcing the next stop. Built with
 // fromCodePoint, NEVER pasted as a literal: a literal astral character does not
 // survive every editing path, and the failure mode is a widget that is simply
@@ -387,7 +448,14 @@ function barState(snapshot, nowSec) {
 
 function tooltipText(snapshot, nowSec) {
   if (!snapshot.saved || !snapshot.station) return "Headway - no station saved"
+  // The ROUTES are named, which the spec's format has always called for and
+  // which was missing entirely. It only became meaningful once the route filter
+  // existed: before that every route the station served was watched, so there
+  // was no subset worth printing. All of them are listed rather than just the
+  // first -- naming one of three is a quieter kind of wrong than naming none.
+  var watched = snapshot.saved.routes || []
   var head = snapshot.station.name + " - " +
+             (watched.length > 0 ? watched.join(" ") + " " : "") +
              directionLabelOf(snapshot.station, snapshot.saved.direction)
   if (!snapshot.ok) return head + " - feed unreachable"
   var routes = snapshot.saved.routes
@@ -428,6 +496,8 @@ if (typeof module !== "undefined") {
     distanceText: distanceText,
     toggleRoute: toggleRoute,
     nextDirection: nextDirection,
+    matchedRouteOf: matchedRouteOf,
+    alertsForDisplay: alertsForDisplay,
     directionLabelOf: directionLabelOf,
     barState: barState,
     tooltipText: tooltipText

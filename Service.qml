@@ -77,8 +77,12 @@ Item {
   // and the rows stay put.
   readonly property int nowMinute: Math.floor(root.nowSec / 60)
 
+  // alertsForDisplay, not alertsFor: each row carries the saved route it belongs
+  // to, and the list is ordered by the rider's own route order. The spec asks
+  // for alerts grouped by route; a flat list of unattributed sentences is most
+  // of the panel at an interchange.
   readonly property var liveAlerts: root.saved
-    ? Model.alertsFor(root.saved.routes, root.alerts, root.nowMinute * 60)
+    ? Model.alertsForDisplay(root.saved.routes, root.alerts, root.nowMinute * 60)
     : []
 
   readonly property var barState: Model.barState(root.snapshot, root.nowSec)
@@ -408,8 +412,28 @@ Item {
   property var seenAlertIds: ({})
   property bool wasStale: false
 
+  // False until the first alert poll has been absorbed. The alerts Timer has
+  // triggeredOnStart, so without this every alert already active on a saved
+  // route counts as new at shell start and fires a notification -- a burst on
+  // every login and every redeploy, for alerts that were running long before
+  // the widget started. The spec frames notifications as firing on the
+  // transition INTO an alert, and at a cold start there is no transition, only
+  // a backlog.
+  property bool alertsPrimed: false
+
   function checkNewAlerts() {
     if (!root.notifyRouteAlert || !root.saved) return
+    if (!root.alertsPrimed) {
+      // Absorb the current state silently, so later polls report real changes.
+      // Every active alert is still visible in the panel -- this suppresses the
+      // notification, not the alert.
+      var backlog = Model.alertsFor(root.saved.routes, root.alerts, root.nowSec)
+      for (var b = 0; b < backlog.length; b++) {
+        root.seenAlertIds[backlog[b].id] = true
+      }
+      root.alertsPrimed = true
+      return
+    }
     // Computes its own list rather than reading root.liveAlerts, and that is
     // deliberate — not duplication to be tidied away. liveAlerts filters at
     // MINUTE resolution, which is what stops the panel's alert Repeater

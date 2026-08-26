@@ -11,25 +11,74 @@ const out = join(dirname(fileURLToPath(import.meta.url)), "..", "StationData.js"
 const res = await fetch(URL_);
 if (!res.ok) throw new Error(`station fetch failed: HTTP ${res.status}`);
 const rows = await res.json();
-if (rows.length !== 496) {
-  console.warn(`WARNING: expected 496 stations, got ${rows.length}. ` +
-    `The MTA may have opened or closed a station -- verify before committing.`);
+
+// THROWS rather than warning, and does so BEFORE writing anything. The previous
+// version warned and then overwrote StationData.js anyway -- and
+// tests/stationdata.test.js hard-asserts 496 rows, so a short table failed the
+// suite only after it had replaced the good file. Warn-then-clobber is the bad
+// half of both options.
+//
+// A genuine MTA change is expected occasionally, so it is overridable -- but
+// deliberately, by a human who has looked.
+const EXPECTED = 496;
+const allowCountChange = process.argv.includes("--allow-count-change");
+if (rows.length !== EXPECTED && !allowCountChange) {
+  throw new Error(
+    `expected ${EXPECTED} stations, got ${rows.length}. The MTA may have opened ` +
+    `or closed one. Nothing has been written. Verify the diff you are about to ` +
+    `commit, then re-run with --allow-count-change.`);
+}
+
+// Every field is checked, and a missing one is an ERROR rather than "". The
+// previous `||` defaults meant an upstream field RENAME degraded silently to
+// empty strings across all 496 rows -- and lat/lon were worse than the string
+// fields, because Number(undefined) is NaN, no default caught it, and nothing
+// asserts finiteness on this script's output (only on the committed table). A
+// table of NaN coordinates would make every haversine distance NaN and quietly
+// destroy the nearest-station ordering.
+const problems = [];
+function need(row, field, kind, index) {
+  const v = row[field];
+  if (kind === "number") {
+    const n = Number(v);
+    if (!Number.isFinite(n)) {
+      problems.push(`row ${index}: ${field} is not a finite number (${JSON.stringify(v)})`);
+      return 0;
+    }
+    return n;
+  }
+  if (typeof v !== "string" || v === "") {
+    problems.push(`row ${index}: ${field} is missing or empty (${JSON.stringify(v)})`);
+    return "";
+  }
+  return v;
 }
 
 const stations = rows
-  .map((r) => ({
-    id: r.gtfs_stop_id,
-    name: r.stop_name,
-    routes: (r.daytime_routes || "").split(/\s+/).filter(Boolean),
-    borough: r.borough || "",
-    line: r.line || "",
-    complexId: r.complex_id || "",
-    lat: Number(r.gtfs_latitude),
-    lon: Number(r.gtfs_longitude),
-    labelN: r.north_direction_label || "",
-    labelS: r.south_direction_label || "",
+  .map((r, i) => ({
+    id: need(r, "gtfs_stop_id", "string", i),
+    name: need(r, "stop_name", "string", i),
+    routes: need(r, "daytime_routes", "string", i).split(/\s+/).filter(Boolean),
+    borough: need(r, "borough", "string", i),
+    line: need(r, "line", "string", i),
+    // complex_id and the direction labels are legitimately absent on some rows:
+    // a station in no complex has no complex id, and a terminal has no label
+    // for the direction it does not serve. These stay tolerant on purpose.
+    complexId: typeof r.complex_id === "string" ? r.complex_id : "",
+    lat: need(r, "gtfs_latitude", "number", i),
+    lon: need(r, "gtfs_longitude", "number", i),
+    labelN: typeof r.north_direction_label === "string" ? r.north_direction_label : "",
+    labelS: typeof r.south_direction_label === "string" ? r.south_direction_label : "",
   }))
   .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+if (problems.length > 0) {
+  throw new Error(
+    `${problems.length} row(s) failed validation. Nothing has been written -- ` +
+    `the upstream schema has probably changed.\n  ` +
+    problems.slice(0, 20).join("\n  ") +
+    (problems.length > 20 ? `\n  ... and ${problems.length - 20} more` : ""));
+}
 
 const body = stations
   .map((s) => "  " + JSON.stringify(s))

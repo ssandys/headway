@@ -99,7 +99,7 @@ test("utf8 decodes a 3-byte sequence", () => {
 test("utf8 decodes a 4-byte (astral) sequence", () => {
   // The 4-byte branch is the only one that needs String.fromCodePoint and a
   // surrogate pair, and nothing else in the suite reaches it. These bytes are
-  // U+F0BA4 -- md-hat_fedora, the plugin's own bar glyph -- so this case
+  // U+F1308 -- md-account_tie_voice, the plugin's own bar glyph -- so this case
   // doubles as proof the engine round-trips the exact codepoint Model.js
   // builds in a later task.
   const bytes = u8(0xf3, 0xb1, 0x8c, 0x88)
@@ -301,4 +301,53 @@ test("decodeAlerts reads active_period with start and end not transposed", () =>
 
 test("decodeAlerts tolerates an empty buffer", () => {
   assert.deepEqual(Gtfs.decodeAlerts(new Uint8Array(0)), { timestamp: 0, alerts: [] })
+})
+
+test("walkFields SKIPS a group-encoded field instead of discarding the feed", () => {
+  // F12. Wire types 3 and 4 are START_GROUP/END_GROUP -- legal proto2, and
+  // GTFS-Realtime IS proto2 (the NYCT and Mercury extensions attach through
+  // `extend` blocks). walkFields used to throw on them, and Service.qml turns
+  // any decode throw into "feed unreachable" -- so ONE group-encoded field
+  // anywhere in a 233 KB feed would paint the bar red for a feed that returned
+  // 200 with perfectly good trip data. The comment above decodeTripUpdates
+  // claimed unrecognised fields were always skipped; for a group that was false.
+  //
+  //   field 1, varint 1        08 01
+  //   field 2, START_GROUP     13
+  //     field 3, varint 7      18 07
+  //   field 2, END_GROUP       14
+  //   field 4, varint 9        20 09
+  const bytes = u8(0x08, 0x01, 0x13, 0x18, 0x07, 0x14, 0x20, 0x09)
+  const seen = []
+  Gtfs.walkFields(bytes, 0, bytes.length, (field, wire, value) => {
+    seen.push([field, wire, value])
+  })
+  assert.deepEqual(seen, [[1, 0, 1], [4, 0, 9]],
+    "fields either side of the group decode; the group itself is skipped whole")
+})
+
+test("walkFields skips a NESTED group", () => {
+  // Depth tracking, not a scan for the first wire-4 tag.
+  //   field 1, START_GROUP     0b
+  //     field 2, START_GROUP   13
+  //       field 3, varint 7    18 07
+  //     field 2, END_GROUP     14
+  //   field 1, END_GROUP       0c
+  //   field 5, varint 4        28 04
+  const bytes = u8(0x0b, 0x13, 0x18, 0x07, 0x14, 0x0c, 0x28, 0x04)
+  const seen = []
+  Gtfs.walkFields(bytes, 0, bytes.length, (f, w, v) => seen.push([f, w, v]))
+  assert.deepEqual(seen, [[5, 0, 4]])
+})
+
+test("walkFields still rejects a genuinely invalid wire type", () => {
+  // 6 and 7 are the only invalid ones. Wire 7 on field 1 is 0x0f.
+  assert.throws(() => Gtfs.walkFields(u8(0x0f), 0, 1, () => {}),
+    /unknown wire type 7/)
+})
+
+test("walkFields rejects an unterminated group rather than running off the end", () => {
+  // START_GROUP with no matching END_GROUP. Must throw, not loop or read past.
+  assert.throws(() => Gtfs.walkFields(u8(0x13, 0x18, 0x07), 0, 3, () => {}),
+    /group/)
 })

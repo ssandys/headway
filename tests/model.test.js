@@ -527,3 +527,58 @@ test("nextDirection is safe on junk rather than inventing a direction", () => {
     "an unknown current direction falls to the first available")
   assert.equal(Model.nextDirection(null, "S"), "S")
 })
+
+test("tooltipText names the routes being watched", () => {
+  // F18. The spec's format is `Bedford Av - L Manhattan - 4, 11 min`; the route
+  // was missing entirely, which only became fixable once the route filter
+  // existed and there was a meaningful subset to print.
+  const snap = {
+    ok: true, feedTimestamp: 1000, staleAfterSec: 180,
+    station: { name: "Bedford Av", labelN: "Manhattan", labelS: "Outbound" },
+    saved: { stopId: "L08", direction: "N", routes: ["L"] },
+    arrivals: [{ etaSec: 240 }, { etaSec: 660 }],
+    alerts: []
+  }
+  assert.equal(Model.tooltipText(snap, 1000), "Bedford Av - L Manhattan - 4, 11 min")
+})
+
+test("tooltipText lists every watched route at an interchange", () => {
+  // The filter can keep more than one, and naming only the first would be a
+  // quieter kind of wrong than naming none.
+  const snap = {
+    ok: true, feedTimestamp: 1000, staleAfterSec: 180,
+    station: { name: "14 St-Union Sq", labelN: "Uptown", labelS: "Downtown" },
+    saved: { stopId: "635", direction: "S", routes: ["4", "5", "6"] },
+    arrivals: [{ etaSec: 120 }],
+    alerts: []
+  }
+  assert.equal(Model.tooltipText(snap, 1000),
+    "14 St-Union Sq - 4 5 6 Downtown - 2 min")
+})
+
+test("alertsForDisplay tags each alert with the saved route it matched", () => {
+  // F11. The spec asks for alerts grouped by route; they rendered as a flat
+  // wall of unattributed sentences. The route a row belongs to has to be
+  // computable outside a QML binding to be testable at all.
+  const alerts = [
+    { id: "a", alertType: "Delays", routes: ["6"], periods: [], headerText: "six" },
+    { id: "b", alertType: "Delays", routes: ["4"], periods: [], headerText: "four" },
+    { id: "c", alertType: "Delays", routes: ["Q", "4"], periods: [], headerText: "q-four" }
+  ]
+  const out = Model.alertsForDisplay(["4", "5", "6"], alerts, 1000)
+  assert.deepEqual(out.map((a) => a.id), ["b", "c", "a"],
+    "sorted by the saved-route order the rider chose, not feed order")
+  assert.deepEqual(out.map((a) => a.matchedRoute), ["4", "4", "6"])
+})
+
+test("alertsForDisplay keeps an alert whose route it cannot attribute", () => {
+  // alertsFor already filtered these to saved routes, so a blank match means an
+  // express id or a shape change -- and dropping the row would hide a real
+  // service alert. It renders unattributed instead.
+  const alerts = [
+    { id: "x", alertType: "Delays", routes: ["6X"], periods: [], headerText: "express" }
+  ]
+  const out = Model.alertsForDisplay(["6"], alerts, 1000)
+  assert.equal(out.length, 1, "the alert survives")
+  assert.equal(out[0].matchedRoute, "6", "6X normalizes onto the 6")
+})
