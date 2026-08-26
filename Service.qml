@@ -1,0 +1,414 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import "Gtfs.js" as Gtfs
+import "Model.js" as Model
+import "Stations.js" as Stations
+import "StationData.js" as StationData
+
+Item {
+  id: root
+
+  // Injected by Panel.qml. Ui/Panel.qml declares `settings`; this Item does
+  // not, so it must be handed down explicitly.
+  property var settings: ({})
+
+  function setting(key, fallback) {
+    var value = root.settings ? root.settings[key] : undefined
+    return value === undefined || value === null ? fallback : value
+  }
+
+  readonly property int openInterval: setting("pollIntervalOpenSec", 30)
+  readonly property int idleInterval: setting("pollIntervalIdleSec", 90)
+  readonly property int alertsInterval: setting("alertsIntervalSec", 300)
+  readonly property int staleAfterSec: setting("staleAfterSec", 180)
+  readonly property int trainsPerDirection: setting("trainsPerDirection", 3)
+  readonly property bool notifyRouteAlert: setting("notifyRouteAlert", true)
+  readonly property bool notifyFeedStale: setting("notifyFeedStale", true)
+
+  property bool panelOpen: false
+
+  property bool ok: true
+  property string error: ""
+  property int feedTimestamp: 0
+  property var arrivals: []
+  property var alerts: []
+  property var stations: []
+  property string activeStationId: ""
+  property int nowSec: 0
+  property bool loading: false
+
+  // Ticks every second so countdowns move without refetching. Arrival times are
+  // absolute epoch seconds, so this is the whole reason a 30s poll still reads
+  // as live.
+  Timer {
+    interval: 1000; running: true; repeat: true
+    onTriggered: {
+      root.nowSec = Math.floor(Date.now() / 1000)
+      root.sweepInflight()
+    }
+  }
+
+  Component.onCompleted: root.nowSec = Math.floor(Date.now() / 1000)
+
+  readonly property var saved: {
+    for (var i = 0; i < root.stations.length; i++) {
+      if (root.stations[i].stopId === root.activeStationId) return root.stations[i]
+    }
+    return root.stations.length > 0 ? root.stations[0] : null
+  }
+
+  readonly property var station: root.saved ? Stations.byId(StationData.STATIONS, root.saved.stopId) : null
+
+  readonly property var snapshot: ({
+    ok: root.ok, feedTimestamp: root.feedTimestamp, staleAfterSec: root.staleAfterSec,
+    station: root.station, saved: root.saved, arrivals: root.arrivals, alerts: root.alerts
+  })
+
+  // Named barState, NOT bar. `bar` is the host Bar object throughout this
+  // codebase (Ui/Panel.qml injects it, WidgetButton and KeyboardPanel both
+  // take it), so a property called `bar` here would read as that everywhere
+  // it is used in Panel.qml.
+  // Alerts are filtered against a MINUTE-resolution clock, never nowSec.
+  // Panel.qml's alert Repeater binds to this, and a Repeater's `model` is a
+  // `var` that QML compares BY REFERENCE — so a fresh array on every 1s tick
+  // would destroy and recreate every alert row once a second. Active-period
+  // boundaries move on a human timescale, so minute resolution costs nothing
+  // and the rows stay put.
+  readonly property int nowMinute: Math.floor(root.nowSec / 60)
+
+  readonly property var liveAlerts: root.saved
+    ? Model.alertsFor(root.saved.routes, root.alerts, root.nowMinute * 60)
+    : []
+
+  readonly property var barState: Model.barState(root.snapshot, root.nowSec)
+  readonly property string tooltip: Model.tooltipText(root.snapshot, root.nowSec)
+
+  // ---- persisted state -------------------------------------------------
+  // Plugin settings are READ-ONLY -- the shell exposes no write-back API -- so
+  // saved stations need their own file. This sits beside weather.json and
+  // flight-radar.json, the convention Omarchy already uses for exactly this.
+  FileView {
+    id: stateFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/headway.json"
+    watchChanges: true
+    printErrors: false
+    atomicWrites: true
+    onLoaded: root.loadState()
+    onFileChanged: root.loadState()
+    onLoadFailed: { root.stations = []; root.activeStationId = "" }
+  }
+
+  function loadState() {
+    try {
+      var data = JSON.parse(stateFile.text())
+      root.stations = data.stations || []
+      root.activeStationId = data.activeStationId || ""
+    } catch (e) {
+      root.stations = []
+      root.activeStationId = ""
+    }
+  }
+
+  function writeState() {
+    stateFile.setText(JSON.stringify({
+      version: 1, activeStationId: root.activeStationId, stations: root.stations
+    }, null, 2) + "\n")
+  }
+
+  function setActive(id) { root.activeStationId = id; writeState(); refresh() }
+
+  function saveStation(entry) {
+    var next = root.stations.slice()
+    for (var i = 0; i < next.length; i++) {
+      if (next[i].stopId === entry.stopId) { next[i] = entry; root.stations = next; writeState(); return }
+    }
+    next.push(entry)
+    root.stations = next
+    if (!root.activeStationId) root.activeStationId = entry.stopId
+    writeState()
+    refresh()
+  }
+
+  function removeStation(id) {
+    var next = []
+    for (var i = 0; i < root.stations.length; i++) {
+      if (root.stations[i].stopId !== id) next.push(root.stations[i])
+    }
+    root.stations = next
+    if (root.activeStationId === id) root.activeStationId = next.length ? next[0].stopId : ""
+    writeState()
+    refresh()
+  }
+
+  // ---- fetching --------------------------------------------------------
+  property int pending: 0
+  property var tripLists: []
+  property int maxTimestamp: 0
+
+  // Qt's XMLHttpRequest does not reliably honour the `timeout` property, so
+  // each request carries a deadline that the one-second tick sweeps. This
+  // path is also what the unreachable-feed state depends on, so it is not
+  // merely defensive.
+  //
+  // Deliberately NOT a Timer created per request via Qt.createQmlObject:
+  // that call appears nowhere in this shell or in galley/colophon, it
+  // recompiles QML at runtime, and it would create one object per feed per
+  // poll (up to eight every 30s) that must be explicitly destroyed.
+  property var inflight: []
+
+  function fetchBytes(url, onOk, onFail) {
+    var xhr = new XMLHttpRequest()
+    var entry = { xhr: xhr, deadline: root.nowSec + 15, settled: false, onFail: onFail }
+    // Reassign, never push in place: mutating a QML `var` array property
+    // does not fire a change notification, so bindings would not see it.
+    var queued = root.inflight.slice()
+    queued.push(entry)
+    root.inflight = queued
+    xhr.open("GET", url)
+    xhr.responseType = "arraybuffer"
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== XMLHttpRequest.DONE || entry.settled) return
+      entry.settled = true
+      if (xhr.status !== 200) { onFail("HTTP " + xhr.status); return }
+      onOk(new Uint8Array(xhr.response))
+    }
+    xhr.send()
+  }
+
+  function sweepInflight() {
+    var keep = []
+    for (var i = 0; i < root.inflight.length; i++) {
+      var e = root.inflight[i]
+      if (e.settled) continue
+      if (root.nowSec > e.deadline) {
+        e.settled = true
+        e.xhr.abort()
+        e.onFail("timed out")
+        continue
+      }
+      keep.push(e)
+    }
+    root.inflight = keep
+  }
+
+  // Bumped by every refresh. A callback belonging to a superseded refresh
+  // returns without touching state.
+  //
+  // Without this, two overlapping refreshes interleave: refresh() resets
+  // tripLists and pending, so the first refresh's callbacks push into the
+  // second's fresh array and decrement the second's counter. `pending` hits
+  // zero early, arrivals are computed from a PARTIAL MIX of both, and the
+  // remaining callbacks then drive `pending` negative and recompute on each.
+  //
+  // The poll timer alone cannot cause it — the 15s abort deadline is shorter
+  // than the 30s open interval. But refresh() is called on demand from four
+  // places: the `r` key, middle-click, setActive(), and saveStation()/
+  // removeStation(). Clicking a saved station while a poll is in flight is
+  // the ordinary way to hit this.
+  property int generation: 0
+
+  function abortInflight() {
+    for (var i = 0; i < root.inflight.length; i++) {
+      var e = root.inflight[i]
+      // Mark settled BEFORE aborting: abort() fires readystatechange with
+      // DONE, and the existing `entry.settled` guard is what swallows it.
+      if (!e.settled) { e.settled = true; e.xhr.abort() }
+    }
+    root.inflight = []
+  }
+
+  function refresh() {
+    if (!root.saved) { root.arrivals = []; return }
+    var feeds = Gtfs.feedsForRoutes(root.saved.routes)
+    if (feeds.length === 0) { root.arrivals = []; return }
+    root.abortInflight()
+    root.generation = root.generation + 1
+    var gen = root.generation
+    root.loading = true
+    root.tripLists = []
+    root.maxTimestamp = 0
+    root.pending = feeds.length
+    for (var i = 0; i < feeds.length; i++) {
+      fetchBytes(Gtfs.feedUrl(feeds[i]), function (bytes) {
+        if (gen !== root.generation) return
+        // Gtfs.js throws on a malformed or truncated buffer rather than
+        // returning garbage. A dropped connection mid-body is a realistic
+        // input, and an uncaught throw here escapes into the shell process,
+        // so the decode is wrapped and routed to the same failure path as an
+        // HTTP error.
+        var decoded
+        try {
+          decoded = Gtfs.decodeTripUpdates(bytes)
+        } catch (e) {
+          root.finishFeed(false, "malformed feed: " + e.message)
+          return
+        }
+        var lists = root.tripLists.slice()
+        lists.push(decoded.trips)
+        root.tripLists = lists
+        if (decoded.timestamp > root.maxTimestamp) root.maxTimestamp = decoded.timestamp
+        root.finishFeed(true, "")
+      }, function (why) {
+        if (gen !== root.generation) return
+        root.finishFeed(false, why)
+      })
+    }
+  }
+
+  function finishFeed(succeeded, why) {
+    if (!succeeded) { root.ok = false; root.error = why }
+    root.pending = root.pending - 1
+    if (root.pending > 0) return
+    root.loading = false
+    if (root.tripLists.length === 0) return
+    root.ok = true
+    root.error = ""
+    root.feedTimestamp = root.maxTimestamp
+    root.arrivals = Model.arrivalsFor(
+      root.saved, Model.dedupeTrips(root.tripLists), root.nowSec)
+    root.checkStale()
+  }
+
+  function refreshAlerts() {
+    fetchBytes(Gtfs.ALERTS_URL, function (bytes) {
+      // Same guard as the trip decode: a malformed body must not throw into
+      // the shell. Alerts are advisory, so a failure leaves the previous
+      // alert list standing rather than blanking it.
+      try {
+        var decoded = Gtfs.decodeAlerts(bytes)
+        root.alerts = decoded.alerts
+        root.checkNewAlerts()
+      } catch (e) {
+        // keep the last good alerts
+      }
+    }, function (why) { /* alerts are advisory; a failure must not blank arrivals */ })
+  }
+
+  Timer {
+    id: pollTimer
+    interval: (root.panelOpen ? root.openInterval : root.idleInterval) * 1000
+    running: true; repeat: true; triggeredOnStart: true
+    onTriggered: root.refresh()
+  }
+
+  Timer {
+    interval: root.alertsInterval * 1000
+    running: true; repeat: true; triggeredOnStart: true
+    onTriggered: root.refreshAlerts()
+  }
+
+  // ---- notifications ---------------------------------------------------
+  // Diff state lives here, not in the pure modules: they hold nothing between
+  // calls, so anything needing memory across polls belongs to the caller.
+  property var seenAlertIds: ({})
+  property bool wasStale: false
+
+  function checkNewAlerts() {
+    if (!root.notifyRouteAlert || !root.saved) return
+    // Computes its own list rather than reading root.liveAlerts, and that is
+    // deliberate — not duplication to be tidied away. liveAlerts filters at
+    // MINUTE resolution, which is what stops the panel's alert Repeater
+    // rebuilding every delegate once a second. Notifications want SECOND
+    // resolution so a "no service" alert reaches you promptly instead of up
+    // to 59 seconds late. (Reading liveAlerts here would be safe — QML
+    // bindings are eager, verified by probe — it would just be slower.)
+    var live = Model.alertsFor(root.saved.routes, root.alerts, root.nowSec)
+    for (var i = 0; i < live.length; i++) {
+      var a = live[i]
+      var cls = Model.classifyAlert(a.alertType)
+      if (cls !== "amber" && cls !== "red") continue
+      // hasOwnProperty, not a bare lookup. seenAlertIds is a plain object
+      // used as a set, so `seenAlertIds["constructor"]` finds the inherited
+      // member, reads as already-seen, and that alert would NEVER notify.
+      // Alert ids come from the feed (`lmm:alert:264661:26`), and this is the
+      // third place in this project where a plain-object lookup table needed
+      // the same guard — Gtfs.js's feed map and Model.js's severity tables
+      // were the others.
+      if (Object.prototype.hasOwnProperty.call(root.seenAlertIds, a.id)) continue
+      root.seenAlertIds[a.id] = true
+      root.notify("Headway - " + a.alertType, a.headerText || "")
+    }
+  }
+
+  function checkStale() {
+    if (!root.notifyFeedStale) return
+    var age = root.nowSec - root.feedTimestamp
+    var stale = root.feedTimestamp > 0 && age > root.staleAfterSec
+    if (stale && !root.wasStale) root.notify("Headway", "Train data has gone stale.")
+    if (!stale && root.wasStale) root.notify("Headway", "Train data is current again.")
+    root.wasStale = stale
+  }
+
+  // A QUEUE, not a single pending slot. Colophon uses one slot and records
+  // why that is enough there: "there is only one notification type, so a
+  // burst is not reachable... add galley's full queue if you add a second
+  // type."
+  //
+  // Measured, because the obvious justification is wrong: a single slot
+  // handles a burst of TWO perfectly — the first sends immediately, the
+  // second waits in the slot and drains after it. It only starts losing
+  // messages at THREE, where the middle one is overwritten before it can be
+  // sent. So "Headway has two notification types" is not by itself the
+  // reason.
+  //
+  // The reason is that checkNewAlerts emits one notification per NEWLY
+  // APPEARED alert, not one per type. Two new alerts on saved routes in the
+  // same poll, plus the feed going stale, is a three-message burst — and a
+  // rider on N/Q/R/W can pick up two at once.
+  property var notifyQueue: []
+
+  Process {
+    id: notifyProc
+    onRunningChanged: {
+      // Handle runningChanged, NOT just exited: Quickshell's Process never
+      // emits exited() when a process fails to SPAWN, so an exited-only
+      // handler latches forever the first time a binary is missing.
+      //
+      // Qt.callLater rather than assigning command/running here directly —
+      // both galley and colophon do this, and re-entering the handler by
+      // starting the next process inside it is what they are avoiding.
+      if (notifyProc.running) return
+      Qt.callLater(root.sendNextNotification)
+    }
+  }
+
+  function notify(summary, body) {
+    var queued = root.notifyQueue.slice()
+    queued.push({ summary: summary, body: body })
+    root.notifyQueue = queued
+    sendNextNotification()
+  }
+
+  function sendNextNotification() {
+    // Assigning Process.command while it is still running is a silent no-op,
+    // so exactly one at a time.
+    if (notifyProc.running) return
+    if (root.notifyQueue.length === 0) return
+    var next = root.notifyQueue[0]
+    root.notifyQueue = root.notifyQueue.slice(1)
+    // `--` before the title terminates option parsing. Alert headlines come
+    // straight from the MTA feed, so one beginning with a dash would
+    // otherwise be read as a flag. Galley passes `--` for the same reason.
+    notifyProc.command = ["notify-send", "-a", "Headway", "--", next.summary, next.body]
+    notifyProc.running = true
+  }
+
+  // ---- location --------------------------------------------------------
+  // Reuses the fix Omarchy already has rather than inventing a second one.
+  // Setup convenience only: read once, never on a timer.
+  property var origin: null
+
+  FileView {
+    id: weatherFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/weather.json"
+    printErrors: false
+    onLoaded: {
+      try {
+        var w = JSON.parse(weatherFile.text())
+        if (w.latitude && w.longitude) root.origin = { lat: w.latitude, lon: w.longitude }
+      } catch (e) { root.origin = null }
+    }
+    onLoadFailed: root.origin = null
+  }
+}
