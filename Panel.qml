@@ -116,6 +116,22 @@ Panel {
 
     ColumnLayout {
       id: contentColumn
+      // REQUIRED, and left/right/top rather than anchors.fill. Without them the
+      // column takes its own implicitWidth -- the widest child, which is an
+      // unwrapped alert headline -- while the panel background stays at
+      // contentWidth, so the right-hand column and long alerts paint OUTSIDE
+      // the panel, over whatever window is behind it. `wrapMode` alone does not
+      // prevent this: a wrapping Text still reports its full single-line
+      // implicitWidth, and Layout.fillWidth only shares out surplus space, it
+      // never caps an implicit width.
+      //
+      // Not anchors.fill: pinning the bottom too would drive the column's
+      // height from the panel while contentHeight is bound BACK to
+      // contentColumn.implicitHeight -- a binding loop. galley and colophon
+      // both use exactly these three anchors for that reason.
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
       spacing: Style.space(6)
 
 
