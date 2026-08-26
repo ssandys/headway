@@ -17,7 +17,6 @@ const Stations = require_("../Stations.js");
 const { STATIONS } = require_("../StationData.js");
 Stations.load(STATIONS);
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE = join(process.env.HOME, ".local/state/omarchy/settings/headway.json");
 
 function savedStations() {
@@ -31,11 +30,29 @@ function savedStations() {
       console.error("   eg: node scripts/collect.mjs L08 L N");
       process.exit(2);
     }
+    const dir = direction || "N";
+    if (dir !== "N" && dir !== "S") {
+      // Anything else silently takes the labelS branch downstream and
+      // produces a correctly-shaped snapshot with a MISLABELLED direction —
+      // wrong output is worse than an error message.
+      console.error(`direction must be N or S, got ${JSON.stringify(dir)}`);
+      process.exit(2);
+    }
     return { activeStationId: stopId,
-      stations: [{ stopId, routes: routes.split(","), direction: direction || "N" }] };
+      stations: [{ stopId, routes: routes.split(","), direction: dir }] };
   }
   try {
-    return JSON.parse(readFileSync(STATE, "utf8"));
+    const parsed = JSON.parse(readFileSync(STATE, "utf8"));
+    // The JSON.parse guard alone is not enough: a file that parses fine but
+    // carries the wrong shape — `{"activeStationId":"L08"}` with no stations
+    // array, or `{"stations": null}` — reaches `.find` and throws a
+    // TypeError with a stack trace and exit 1. For a tool whose contract is
+    // "always emit JSON", a wrong-shaped state file must degrade like any
+    // other bad input.
+    return {
+      activeStationId: parsed && parsed.activeStationId ? parsed.activeStationId : null,
+      stations: parsed && Array.isArray(parsed.stations) ? parsed.stations : [],
+    };
   } catch {
     return { activeStationId: null, stations: [] };
   }
@@ -51,8 +68,17 @@ const state = savedStations();
 const active = state.stations.find((s) => s.stopId === state.activeStationId)
   || state.stations[0] || null;
 
+// `ok` means "the feed fetch succeeded", NOT "this widget is configured".
+// With no saved station nothing is fetched, so ok stays true and `error`
+// explains why the snapshot is empty. A caller gating on health with
+// `jq -e '.ok'` is asking about the feed, and the feed is fine.
+//
+// Every key is initialised here rather than added on the success path, so
+// the shape is identical whether ok is true or false — a debugging tool with
+// a schema that changes under failure is hard to script against.
 const snapshot = { schema: 1, ok: true, error: null, feedTimestamp: 0,
-  staleAfterSec: 180, station: null, saved: active, arrivals: [], alerts: [] };
+  staleAfterSec: 180, station: null, saved: active, arrivals: [], alerts: [],
+  feedCount: 0, bar: null, tooltip: null };
 
 if (!active) {
   snapshot.error = "no saved stations";
