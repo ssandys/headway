@@ -298,6 +298,22 @@ test("barState errors for a red alert", () => {
   assert.equal(Model.barState(s, NOW).severity, "error")
 })
 
+test("barState lets a red alert win over stale data", () => {
+  // Both conditions hold at once, and the spec's table says error, not warn:
+  // "your line has no service" outranks "this data is a few minutes old".
+  //
+  // This test exists because the precedence was previously unguarded —
+  // proven by mutation: swapping the stale and red branches left every other
+  // test in this file passing. A rider whose line was suspended would have
+  // seen an amber "stale" glyph instead of a red one.
+  const s = snap({
+    feedTimestamp: NOW - 600,
+    arrivals: [{ routeId: "L", express: false, etaSec: 240 }],
+    alerts: [{ id: "a", routes: ["L"], alertType: "No Scheduled Service", periods: [] }],
+  })
+  assert.equal(Model.barState(s, NOW).severity, "error")
+})
+
 test("barState stays calm for planned work", () => {
   const s = snap({
     arrivals: [{ routeId: "L", express: false, etaSec: 240 }],
