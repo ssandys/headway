@@ -429,7 +429,7 @@ Item {
       // notification, not the alert.
       var backlog = Model.alertsFor(root.saved.routes, root.alerts, root.nowSec)
       for (var b = 0; b < backlog.length; b++) {
-        root.seenAlertIds[backlog[b].id] = true
+        root.seenAlertIds["a:" + backlog[b].id] = true
       }
       root.alertsPrimed = true
       return
@@ -453,8 +453,11 @@ Item {
       // third place in this project where a plain-object lookup table needed
       // the same guard — Gtfs.js's feed map and Model.js's severity tables
       // were the others.
-      if (Object.prototype.hasOwnProperty.call(root.seenAlertIds, a.id)) continue
-      root.seenAlertIds[a.id] = true
+      // Prefixed like dedupeTrips' and search's tables: hasOwnProperty guards
+      // the read, but assigning seenAlertIds["__proto__"] never creates an own
+      // property, so such an alert would notify on EVERY poll forever.
+      if (Object.prototype.hasOwnProperty.call(root.seenAlertIds, "a:" + a.id)) continue
+      root.seenAlertIds["a:" + a.id] = true
       root.notify("Headway - " + a.alertType, a.headerText || "")
     }
   }

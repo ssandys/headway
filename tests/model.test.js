@@ -141,7 +141,7 @@ test("classifyAlert treats every Planned- type as planned", () => {
 })
 
 test("a Planned- suspension does NOT redden the bar", () => {
-  // The whole point: 144 of 199 alerts are planned work. If these coloured the
+  // The whole point: 151 of 195 alerts are planned work. If these coloured the
   // glyph it would be amber or red essentially permanently.
   assert.notEqual(Model.classifyAlert("Planned - Suspended"), "red")
 })
@@ -453,7 +453,11 @@ test("barState and tooltipText survive a saved station with no routes", () => {
   // upstream data, not an internal invariant.
   const snap = {
     ok: true, feedTimestamp: 1000, staleAfterSec: 180,
-    station: null, saved: { stopId: "L08", direction: "N" },  // no `routes`
+    // A REAL station, not null. tooltipText returns on its first line when
+    // station is null, so the null version tested nothing and hid the fact that
+    // tooltipText has its own saved.routes read that F4's fix did not cover.
+    station: { name: "Bedford Av", labelN: "Manhattan", labelS: "Outbound" },
+    saved: { stopId: "L08", direction: "N" },  // no `routes`
     arrivals: [],
     // A LIVE alert is required to reach the throw. With an empty alerts array
     // the loop in alertsFor never runs and routes.length is never dereferenced,
@@ -470,13 +474,25 @@ test("dedupeTrips is not fooled by a prototype-chain tripId", () => {
   // reads as already-seen and a real train is dropped from the arrivals list.
   // Same class as the classifyAlert bug that was fixed; AGENTS.md states this
   // as an absolute rule for any table keyed on upstream data.
-  const trips = [
+  // Two directions, and the first draft only tested one. Three DIFFERENT
+  // prototype keys surviving proves the READ is guarded; it passes just as
+  // happily when the WRITE is broken. Two IDENTICAL ones are what proves the
+  // write: `seen["__proto__"] = true` does not create an own property, so the
+  // duplicate is never recognised.
+  const distinct = [
     { tripId: "constructor", routeId: "L", stops: [] },
     { tripId: "__proto__",   routeId: "L", stops: [] },
     { tripId: "toString",    routeId: "L", stops: [] }
   ]
-  assert.equal(Model.dedupeTrips([trips]).length, 3,
-    "three distinct trips must survive")
+  assert.equal(Model.dedupeTrips([distinct]).length, 3,
+    "three distinct trips must survive -- the read side")
+
+  const duplicated = [
+    { tripId: "__proto__", routeId: "L", stops: [] },
+    { tripId: "__proto__", routeId: "L", stops: [] }
+  ]
+  assert.equal(Model.dedupeTrips([duplicated]).length, 1,
+    "an identical __proto__ trip must dedupe -- the write side")
 })
 
 test("toggleRoute removes and restores a route in the station's own order", () => {
@@ -565,16 +581,21 @@ test("alertsForDisplay tags each alert with the saved route it matched", () => {
     { id: "b", alertType: "Delays", routes: ["4"], periods: [], headerText: "four" },
     { id: "c", alertType: "Delays", routes: ["Q", "4"], periods: [], headerText: "q-four" }
   ]
-  const out = Model.alertsForDisplay(["4", "5", "6"], alerts, 1000)
+  // Input order [a, c, b] is deliberate: `a` matches route 6 and belongs LAST,
+  // and b/c both match route 4 and must come back in id order. Given the array
+  // already sorted, node's stable sort returns it unchanged and the assertion
+  // passes with no tie-breaker at all -- which is what the first draft did.
+  const out = Model.alertsForDisplay(["4", "5", "6"], [alerts[0], alerts[2], alerts[1]], 1000)
   assert.deepEqual(out.map((a) => a.id), ["b", "c", "a"],
     "sorted by the saved-route order the rider chose, not feed order")
   assert.deepEqual(out.map((a) => a.matchedRoute), ["4", "4", "6"])
 })
 
-test("alertsForDisplay keeps an alert whose route it cannot attribute", () => {
-  // alertsFor already filtered these to saved routes, so a blank match means an
-  // express id or a shape change -- and dropping the row would hide a real
-  // service alert. It renders unattributed instead.
+test("alertsForDisplay attributes an express alert to its trunk route", () => {
+  // Renamed: this checks NORMALIZATION, not the unattributable case. The old
+  // name claimed to cover a blank matchedRoute while asserting the opposite,
+  // and a blank is in fact unreachable -- alertsFor and matchedRouteOf share
+  // one predicate, so anything that survives the filter always matches.
   const alerts = [
     { id: "x", alertType: "Delays", routes: ["6X"], periods: [], headerText: "express" }
   ]

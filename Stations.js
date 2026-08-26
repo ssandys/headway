@@ -134,15 +134,18 @@ function search(stations, query, origin, limit) {
     // hasOwnProperty throughout: station ids come from MTA data, and a bare
     // `placed[id]` walks the prototype chain, so an id of "constructor" would
     // read as already-placed and that station would silently never appear.
-    if (Object.prototype.hasOwnProperty.call(placed, rows[i].id)) continue
+    // Prefixed, for the same reason dedupeTrips prefixes: hasOwnProperty fixes
+    // the read, but `placed["__proto__"] = true` never creates an own property,
+    // so that station would be pushed again by a later complex pass.
+    if (Object.prototype.hasOwnProperty.call(placed, "s:" + rows[i].id)) continue
     grouped.push(rows[i])
-    placed[rows[i].id] = true
+    placed["s:" + rows[i].id] = true
     if (!rows[i].complexId) continue
     for (var j = i + 1; j < rows.length; j++) {
-      if (Object.prototype.hasOwnProperty.call(placed, rows[j].id)) continue
+      if (Object.prototype.hasOwnProperty.call(placed, "s:" + rows[j].id)) continue
       if (rows[j].complexId !== rows[i].complexId) continue
       grouped.push(rows[j])
-      placed[rows[j].id] = true
+      placed["s:" + rows[j].id] = true
     }
   }
   if (limit && grouped.length > limit) {

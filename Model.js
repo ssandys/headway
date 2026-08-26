@@ -44,12 +44,16 @@ function dedupeTrips(tripLists) {
       // today (0 of 364 in the committed fixtures lack one), so this path
       // exists only for the day that stops being true.
       var key = t.tripId || ("pos:" + i + ":" + j + ":" + t.routeId)
-      // hasOwnProperty, not a bare lookup: `seen[key]` walks the prototype
-      // chain, so a tripId of "constructor" or "toString" reads as already-seen
-      // and a real train vanishes from the arrivals list. Trip ids come from
-      // the feed, so this is upstream data.
-      if (Object.prototype.hasOwnProperty.call(seen, key)) continue
-      seen[key] = true
+      // The key is PREFIXED, which handles both directions. hasOwnProperty
+      // alone fixed only the read: `seen["__proto__"] = true` does not create
+      // an own property at all -- it hits the prototype setter -- so two
+      // identical __proto__ trips were never recognised as duplicates and the
+      // same train appeared twice. Measured: two identical such trips deduped
+      // to 2 rather than 1. A prefix makes every key an ordinary own property
+      // and the whole class goes away.
+      var seenKey = "t:" + key
+      if (Object.prototype.hasOwnProperty.call(seen, seenKey)) continue
+      seen[seenKey] = true
       out.push(t)
     }
   }
@@ -458,8 +462,11 @@ function tooltipText(snapshot, nowSec) {
              (watched.length > 0 ? watched.join(" ") + " " : "") +
              directionLabelOf(snapshot.station, snapshot.saved.direction)
   if (!snapshot.ok) return head + " - feed unreachable"
-  var routes = snapshot.saved.routes
-  var live = alertsFor(routes, snapshot.alerts || [], nowSec)
+  // `watched`, not a second unguarded read of snapshot.saved.routes. The F4 fix
+  // guarded worstAlertClass and missed this one, so tooltipText -- also a
+  // readonly property BINDING on the Service item -- still threw on a state
+  // entry with no routes and still removed the whole widget.
+  var live = alertsFor(watched, snapshot.alerts || [], nowSec)
   for (var i = 0; i < live.length; i++) {
     var cls = classifyAlert(live[i].alertType)
     if (cls === "red" || cls === "amber") {

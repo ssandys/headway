@@ -31,8 +31,6 @@ function readVarint(bytes, pos) {
   }
 }
 
-// visit(field, wire, varintValue, rangeStart, rangeEnd)
-// For wire 2, rangeStart/rangeEnd bound the payload. Otherwise both are -1.
 // Advances past one field's payload without interpreting it. Used only by
 // skipGroup -- walkFields needs the payload itself, so it does its own bounds
 // checks with field-specific messages.
@@ -83,6 +81,8 @@ function skipGroup(bytes, pos, end, groupField) {
   return pos
 }
 
+// visit(field, wire, varintValue, rangeStart, rangeEnd)
+// For wire 2, rangeStart/rangeEnd bound the payload. Otherwise both are -1.
 function walkFields(bytes, start, end, visit) {
   var pos = start
   while (pos < end) {
@@ -129,7 +129,10 @@ function walkFields(bytes, start, end, visit) {
       // feed painted the bar red for a feed that had returned 200 with
       // perfectly good trip data. Wire 3 and 4 are legal proto2 and
       // GTFS-Realtime IS proto2: the NYCT and Mercury extensions attach through
-      // `extend` blocks. Only 6 and 7 are genuinely invalid.
+      // `extend` blocks. 6 and 7 are the only invalid WIRE TYPES -- but this
+      // function still has four distinct throws, the other two being an
+      // unmatched END_GROUP and an unterminated group. Both mean a malformed
+      // stream, so a valid feed reaches none of them.
       pos = skipGroup(bytes, pos, end, field)
     } else if (wire === 4) {
       // An END_GROUP with no START_GROUP. skipGroup consumes matched pairs, so
@@ -229,8 +232,10 @@ function feedUrl(feed) {
 // That now holds for group-encoded fields too (wire 3/4, legal proto2, which
 // GTFS-Realtime is). It did NOT before: walkFields threw on them, and a decode
 // throw becomes "feed unreachable", so one group field would have discarded a
-// whole feed that returned 200 with good data. Only wire 6 and 7 still throw,
-// and those are genuinely invalid.
+// whole feed that returned 200 with good data. 6 and 7 remain the only invalid
+// wire types, though walkFields still throws on a malformed group as well -- an
+// unmatched END_GROUP or one that never terminates. A valid stream reaches
+// neither.
 function decodeStopTimeEvent(bytes, start, end) {
   var time = 0
   walkFields(bytes, start, end, function (f, w, v) {

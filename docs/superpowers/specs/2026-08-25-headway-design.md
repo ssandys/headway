@@ -278,13 +278,13 @@ unverified until they aren't.
 12. **Express variants are distinct route ids, and feeds overlap.** `6X` and
     `7X` were observed in `gtfs`; one `F` trip was observed in `gtfs-g` as
     well as `gtfs-bdfm`. These drive the normalization and dedup rules above.
-13. **`Alert.effect` and `Alert.cause` are set on 0 of 199 alerts.** Every
+13. **`Alert.effect` and `Alert.cause` are set on 0 of 195 alerts.** Every
     alert instead carries the Mercury extension at field **1001**, whose
     sub-field **3** is the `alert_type` string. Sub-fields seen: 1, 2
     (varint timestamps), 3 (type), 4, 7 (varint), 8, 10 (repeated string).
-14. **The alerts protobuf and JSON are equivalent in content.** 199 alerts
-    each; all 199 matched by entity id had **byte-identical** `header_text`,
-    and all 199 carried at least one `route_id`. The protobuf is 478,259
+14. **The alerts protobuf and JSON are equivalent in content.** 195 alerts
+    each; all 195 matched by entity id had **byte-identical** `header_text`,
+    and all 195 carried at least one `route_id`. The protobuf is 478,259
     bytes against the JSON's 998,576 — so the protobuf is chosen, halving
     the transfer and reusing the decoder already required for trip updates.
 15. **14 distinct `alert_type` values in one capture, 151 of 195 prefixed
@@ -415,7 +415,7 @@ Alert.<mercury ext>         = 1001 -> alert_type = 3 (string)
 ```
 
 Note what is **absent**: `Alert.effect` (7) and `Alert.cause` (6) are set on
-**zero** of 199 alerts (finding 13). Severity comes from the Mercury
+**zero** of 195 alerts (finding 13). Severity comes from the Mercury
 extension instead — see "Alert severity".
 
 Timestamps are POSIX seconds around 1.7e9, far inside the 2^53 range a JS
@@ -432,12 +432,12 @@ capture, with counts:
 | Planned - Stops Skipped | 61 | planned |
 | Planned - Part Suspended | 46 | planned |
 | Planned - Express to Local | 24 | planned |
-| Boarding Change | 16 | info |
+| Boarding Change | 15 | info |
 | Planned - Reroute | 11 | planned |
 | Reduced Service | 10 | **amber** |
 | Extra Service | 9 | info |
 | Planned - Suspended | 7 | planned |
-| Delays | 4 | **amber** |
+| Delays | 1 | **amber** |
 | No Scheduled Service | 3 | **red** |
 | Special Schedule | 3 | info |
 | Planned - Extra Transfer | 2 | planned |
