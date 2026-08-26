@@ -171,6 +171,38 @@ Item {
 
   function setActive(id) { root.activeStationId = id; writeState(); refresh() }
 
+  // Changes one saved station's direction WITHOUT activating it.
+  //
+  // Deliberately not saveStation(). That activates by design -- picking a
+  // station AND a direction out of search is a statement of intent -- but
+  // adjusting a background row's direction is not a request to look at it.
+  // Clicking the name is. Routing the toggle through saveStation meant flipping
+  // Bedford Av's direction silently moved the panel header and the bar to
+  // Bedford Av, which no documentation claimed and nobody asked for.
+  function setDirection(stopId, dir) {
+    var next = root.stations.slice()
+    var hit = -1
+    for (var i = 0; i < next.length; i++) {
+      if (next[i].stopId === stopId) { hit = i; break }
+    }
+    if (hit < 0) return
+    if (next[hit].direction === dir) return
+    // A fresh object rather than a mutation: root.stations is read by property
+    // bindings that compare by reference, and mutating in place would leave
+    // them showing the old direction until something else happened to change
+    // the array identity.
+    next[hit] = {
+      stopId: next[hit].stopId, name: next[hit].name,
+      routes: next[hit].routes, direction: dir
+    }
+    root.stations = next
+    writeState()
+    // Only when it is the station actually on screen. Refreshing for a
+    // background row would spend a full feed fetch to change nothing visible
+    // but that row's own label.
+    if (root.activeStationId === stopId) refresh()
+  }
+
   function saveStation(entry) {
     var next = root.stations.slice()
     var found = false

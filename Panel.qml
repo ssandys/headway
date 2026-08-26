@@ -419,15 +419,13 @@ Panel {
               for (var i = 0; i < dirToggle.options.length; i++) {
                 dirs.push(dirToggle.options[i].dir)
               }
-              // saveStation's update branch rewrites in place, then activates
-              // and refreshes -- so the arrival rows and the bar follow the new
-              // direction immediately instead of at the next poll.
-              service.saveStation({
-                stopId: savedRow.modelData.stopId,
-                name: savedRow.modelData.name,
-                routes: savedRow.modelData.routes,
-                direction: Model.nextDirection(dirs, savedRow.modelData.direction)
-              })
+              // setDirection, NOT saveStation: saveStation activates, so
+              // flipping a background row's direction used to drag the panel
+              // and the bar over to it. Changing a row's setting is not a
+              // request to look at that row -- clicking its name is.
+              service.setDirection(
+                savedRow.modelData.stopId,
+                Model.nextDirection(dirs, savedRow.modelData.direction))
             }
           }
 
