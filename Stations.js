@@ -85,24 +85,45 @@ function directionsFor(station) {
 function search(stations, query, origin, limit) {
   var table = stations || []
   var needle = (query || "").toLowerCase()
+  // An origin is only usable if BOTH coordinates are real numbers. haversineKm
+  // on a non-numeric coordinate returns NaN, and `a.distanceKm - b.distanceKm`
+  // is then NaN for every pair -- a comparator that answers "neither", which
+  // leaves the rows in raw table order while the UI still labels them
+  // nearest-first. Degrading to the alphabetical branch is honest; a silently
+  // scrambled "nearest" list is not.
+  var usable = !!origin &&
+    typeof origin.lat === "number" && isFinite(origin.lat) &&
+    typeof origin.lon === "number" && isFinite(origin.lon)
   var rows = []
   var i
   for (i = 0; i < table.length; i++) {
     var s = table[i]
     if (needle && s.name.toLowerCase().indexOf(needle) < 0) continue
     rows.push({
-      id: s.id, name: s.name, routes: s.routes, borough: s.borough,
+      id: s.id, name: s.name,
+      // .slice(), not the array itself. A result row's routes are handed to
+      // saveStation and PERSISTED to headway.json, so aliasing the table would
+      // let a caller's edit reach STATIONS and then the disk.
+      routes: (s.routes || []).slice(),
+      borough: s.borough,
       line: s.line, complexId: s.complexId, lat: s.lat, lon: s.lon,
       labelN: s.labelN, labelS: s.labelS,
-      distanceKm: origin ? haversineKm(origin.lat, origin.lon, s.lat, s.lon) : null
+      distanceKm: usable ? haversineKm(origin.lat, origin.lon, s.lat, s.lon) : null
     })
   }
   rows.sort(function (a, b) {
-    if (a.distanceKm !== null && b.distanceKm !== null) {
+    if (a.distanceKm !== null && b.distanceKm !== null &&
+        a.distanceKm !== b.distanceKm) {
       return a.distanceKm - b.distanceKm
     }
     if (a.name < b.name) return -1
     if (a.name > b.name) return 1
+    // Total order, and it is load-bearing. Qt's V4 sort is NOT stable while
+    // node's has been since ES2019, so without this the six stations named
+    // "86 St" come back in one order under test and another in the shell.
+    // arrivalsFor carries the same fallback for the same reason.
+    if (a.id < b.id) return -1
+    if (a.id > b.id) return 1
     return 0
   })
   // Stable complex grouping: walk the sorted list, and whenever a complex is
@@ -110,18 +131,33 @@ function search(stations, query, origin, limit) {
   var grouped = []
   var placed = {}
   for (i = 0; i < rows.length; i++) {
-    if (placed[rows[i].id]) continue
+    // hasOwnProperty throughout: station ids come from MTA data, and a bare
+    // `placed[id]` walks the prototype chain, so an id of "constructor" would
+    // read as already-placed and that station would silently never appear.
+    if (Object.prototype.hasOwnProperty.call(placed, rows[i].id)) continue
     grouped.push(rows[i])
     placed[rows[i].id] = true
     if (!rows[i].complexId) continue
     for (var j = i + 1; j < rows.length; j++) {
-      if (placed[rows[j].id]) continue
+      if (Object.prototype.hasOwnProperty.call(placed, rows[j].id)) continue
       if (rows[j].complexId !== rows[i].complexId) continue
       grouped.push(rows[j])
       placed[rows[j].id] = true
     }
   }
-  if (limit && grouped.length > limit) return grouped.slice(0, limit)
+  if (limit && grouped.length > limit) {
+    // Extend past the limit rather than slicing through a complex. Contiguity
+    // is the entire point of the grouping above, and a cut that leaves one
+    // platform of a complex visible and its neighbour off the end delivers the
+    // opposite of what it promises. Overshooting by a row or two is the
+    // cheaper error, and it is bounded by the size of one complex.
+    var end = limit
+    var lastComplex = grouped[end - 1].complexId
+    if (lastComplex) {
+      while (end < grouped.length && grouped[end].complexId === lastComplex) end++
+    }
+    return grouped.slice(0, end)
+  }
   return grouped
 }
 

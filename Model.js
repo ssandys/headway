@@ -44,7 +44,11 @@ function dedupeTrips(tripLists) {
       // today (0 of 364 in the committed fixtures lack one), so this path
       // exists only for the day that stops being true.
       var key = t.tripId || ("pos:" + i + ":" + j + ":" + t.routeId)
-      if (seen[key]) continue
+      // hasOwnProperty, not a bare lookup: `seen[key]` walks the prototype
+      // chain, so a tripId of "constructor" or "toString" reads as already-seen
+      // and a real train vanishes from the arrivals list. Trip ids come from
+      // the feed, so this is upstream data.
+      if (Object.prototype.hasOwnProperty.call(seen, key)) continue
       seen[key] = true
       out.push(t)
     }
@@ -104,8 +108,8 @@ function arrivalsFor(saved, trips, nowSec) {
 // Severity is derived from the Mercury extension's alert_type, because GTFS
 // `effect` and `cause` are populated on zero alerts in practice.
 //
-// The "Planned - " prefix is the single most important thing here: it is 144
-// of 199 alerts, all scheduled engineering work, much of it for weekends still
+// The "Planned - " prefix is the single most important thing here: it is 151
+// of 195 alerts, all scheduled engineering work, much of it for weekends still
 // days away. Colouring the bar for those would pin the glyph amber forever.
 var ALERT_RED = { "No Scheduled Service": true }
 var ALERT_AMBER = { "Delays": true, "Reduced Service": true }
@@ -305,7 +309,12 @@ function directionLabelOf(station, direction) {
 }
 
 function worstAlertClass(snapshot, nowSec) {
-  var routes = snapshot.saved ? snapshot.saved.routes : []
+  // Guards saved.routes, not just saved. A state-file entry without `routes`
+  // reaches alertsFor, which dereferences routes.length -- and this runs inside
+  // the barState and tooltip property BINDINGS, where a throw removes the whole
+  // widget rather than one row. headway.json is plain JSON the user is invited
+  // to inspect, so its shape is upstream data, not an internal invariant.
+  var routes = (snapshot.saved && snapshot.saved.routes) ? snapshot.saved.routes : []
   var live = alertsFor(routes, snapshot.alerts || [], nowSec)
   var worst = "info"
   for (var i = 0; i < live.length; i++) {

@@ -234,7 +234,7 @@ unverified until they aren't.
     and all 199 carried at least one `route_id`. The protobuf is 478,259
     bytes against the JSON's 998,576 — so the protobuf is chosen, halving
     the transfer and reusing the decoder already required for trip updates.
-15. **14 distinct `alert_type` values in one capture, 144 of 199 prefixed
+15. **14 distinct `alert_type` values in one capture, 151 of 195 prefixed
     `Planned - `.** See "Alert severity" for the full table and why that
     prefix is load-bearing.
 16. **`stops.txt` is 1,488 rows: 496 parent stations and 992 children**, and

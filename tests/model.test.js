@@ -444,3 +444,37 @@ test("distanceText does not confuse 0 with absent", () => {
   // the distance on the nearest station of all.
   assert.notEqual(Model.distanceText(0), Model.distanceText(null))
 })
+
+test("barState and tooltipText survive a saved station with no routes", () => {
+  // F4. Both are readonly property BINDINGS on the Service item, and a throw in
+  // a QML binding is not confined to one row -- it removes the whole widget.
+  // Reachable from a hand-edited headway.json, a partial write, or an older
+  // build's shape. The state file is advertised as plain JSON, so this is
+  // upstream data, not an internal invariant.
+  const snap = {
+    ok: true, feedTimestamp: 1000, staleAfterSec: 180,
+    station: null, saved: { stopId: "L08", direction: "N" },  // no `routes`
+    arrivals: [],
+    // A LIVE alert is required to reach the throw. With an empty alerts array
+    // the loop in alertsFor never runs and routes.length is never dereferenced,
+    // so the test passes without exercising anything -- which is how the first
+    // draft of this test was green against the unfixed code.
+    alerts: [{ alertType: "Delays", routes: ["L"], periods: [] }]
+  }
+  assert.doesNotThrow(() => Model.barState(snap, 2000), "barState must not throw")
+  assert.doesNotThrow(() => Model.tooltipText(snap, 2000), "tooltipText must not throw")
+})
+
+test("dedupeTrips is not fooled by a prototype-chain tripId", () => {
+  // F14. `seen[key]` walks the prototype chain, so a tripId of "constructor"
+  // reads as already-seen and a real train is dropped from the arrivals list.
+  // Same class as the classifyAlert bug that was fixed; AGENTS.md states this
+  // as an absolute rule for any table keyed on upstream data.
+  const trips = [
+    { tripId: "constructor", routeId: "L", stops: [] },
+    { tripId: "__proto__",   routeId: "L", stops: [] },
+    { tripId: "toString",    routeId: "L", stops: [] }
+  ]
+  assert.equal(Model.dedupeTrips([trips]).length, 3,
+    "three distinct trips must survive")
+})
