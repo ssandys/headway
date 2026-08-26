@@ -26,14 +26,33 @@ Panel {
   // at runtime as a ReferenceError that qmllint cannot see.
   property string query: ""
 
+  // REQUIRED. Ui/Panel.qml does not set its own implicit size, so a bar widget
+  // must size itself from its button — every one of them does: galley:69,
+  // colophon:81, and the first-party dropbox:135 and network:804. Without
+  // these two lines the root is 0x0, `anchors.fill: parent` faithfully gives
+  // the button 0x0, and the widget renders NOTHING with no error logged.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   Service {
     id: service
     settings: root.settings
     panelOpen: root.opened
   }
 
-  WidgetButton {
+  // BarIconButton, NOT WidgetButton. It paints the glyph through OpticalGlyph,
+  // which centres on the painted ink rather than the monospace advance cell;
+  // WidgetButton is for text labels. Every icon-only widget in the bar — audio,
+  // power, network, tray — uses BarIconButton, and both galley and colophon
+  // switched to it for exactly this. It extends WidgetButton, so bar, text,
+  // foreground, tooltipText and onPressed all carry over unchanged.
+  //
+  // anchors.fill: parent is REQUIRED. Without it the button has no geometry
+  // inside the Panel root and renders at zero size — an invisible widget with
+  // no error logged anywhere. Both siblings set it.
+  BarIconButton {
     id: button
+    anchors.fill: parent
     bar: root.bar
     text: Model.BAR_GLYPH + (service.barState.badge ? "  " + service.barState.badge : "")
     tooltipText: service.tooltip
@@ -50,6 +69,7 @@ Panel {
       if (service.barState.severity === "warn") return Model.COLOR_WARN
       return root.barForeground
     }
+
     onPressed: function (which) {
       if (which === Qt.MiddleButton) { service.refresh(); return }
       if (root.opened) root.close()
@@ -105,7 +125,7 @@ Panel {
         Text {
           text: service.station ? service.station.name : "Headway"
           color: root.barForeground
-          font: Style.font.title
+          font.pixelSize: Style.font.title
         }
         Item { Layout.fillWidth: true }
         Text {
@@ -115,7 +135,7 @@ Panel {
             : ""
           color: root.barForeground
           opacity: 0.6
-          font: Style.font.caption
+          font.pixelSize: Style.font.caption
         }
       }
 
@@ -123,7 +143,7 @@ Panel {
         visible: !service.ok
         text: "feed unreachable - " + service.error
         color: Model.COLOR_ERROR
-        font: Style.font.caption
+        font.pixelSize: Style.font.caption
       }
 
       // ---- arrivals ----
@@ -139,7 +159,7 @@ Panel {
             text: arrivalRow.modelData.routeId +
                   (arrivalRow.modelData.express ? "X" : "")
             color: root.barForeground
-            font: Style.font.body
+            font.pixelSize: Style.font.body
           }
           Text {
             // The destination is the trip's own terminal, resolved through the
@@ -152,14 +172,14 @@ Panel {
             }
             color: root.barForeground
             opacity: 0.6
-            font: Style.font.caption
+            font.pixelSize: Style.font.caption
             Layout.fillWidth: true
             elide: Text.ElideRight
           }
           Text {
             text: Model.formatCountdown(arrivalRow.modelData.etaSec)
             color: root.barForeground
-            font: Style.font.body
+            font.pixelSize: Style.font.body
           }
         }
       }
@@ -169,7 +189,7 @@ Panel {
         text: service.saved ? "No trains scheduled" : "No station saved yet"
         color: root.barForeground
         opacity: 0.6
-        font: Style.font.caption
+        font.pixelSize: Style.font.caption
       }
 
       // ---- alerts ----
@@ -184,7 +204,7 @@ Panel {
           required property var modelData
           Layout.fillWidth: true
           wrapMode: Text.WordWrap
-          font: Style.font.caption
+          font.pixelSize: Style.font.caption
           text: alertRow.modelData.headerText
           color: {
             var cls = Model.classifyAlert(alertRow.modelData.alertType)
@@ -247,7 +267,7 @@ Panel {
                   + (hit.modelData.distanceKm !== null
                      ? "  " + hit.modelData.distanceKm.toFixed(1) + " km" : "")
             color: root.barForeground
-            font: Style.font.caption
+            font.pixelSize: Style.font.caption
             Layout.fillWidth: true
             elide: Text.ElideRight
           }
@@ -270,7 +290,7 @@ Panel {
         text: "r refresh   esc close"
         color: root.barForeground
         opacity: 0.6
-        font: Style.font.caption
+        font.pixelSize: Style.font.caption
       }
     }
   }

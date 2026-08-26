@@ -125,7 +125,13 @@ Item {
     }
     next.push(entry)
     root.stations = next
-    if (!root.activeStationId) root.activeStationId = entry.stopId
+    // Adopt it. The spec split the gestures -- search saves, the saved list
+    // activates -- but picking a station AND a direction out of search is an
+    // unambiguous statement of intent, and leaving the panel on the previous
+    // station makes that click look like it did nothing. Observed: saving
+    // Union Sq left the header on Franklin Av, read as a dead button, and
+    // cost a second click on the saved row to finish the job.
+    root.activeStationId = entry.stopId
     writeState()
     refresh()
   }
