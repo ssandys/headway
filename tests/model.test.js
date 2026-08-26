@@ -230,3 +230,103 @@ test("alertsFor drops alerts whose period has not begun", () => {
   ]
   assert.deepEqual(Model.alertsFor(["L"], alerts, NOW), [])
 })
+
+const snap = (over) => Object.assign({
+  ok: true, feedTimestamp: NOW, staleAfterSec: 180,
+  station: { id: "L08", name: "Bedford Av", labelN: "Manhattan", labelS: "Outbound" },
+  saved: { stopId: "L08", routes: ["L"], direction: "N" },
+  arrivals: [], alerts: [],
+}, over)
+
+test("BAR_GLYPH is the fedora, built not typed", () => {
+  // Trap: a literal astral character does NOT survive the editing path. This
+  // asserts the codepoint, not the shape -- a shape check passes just as
+  // happily on a typo'd codepoint.
+  assert.equal(Model.BAR_GLYPH.codePointAt(0), 0xF0BA4)
+  assert.equal(Model.BAR_GLYPH.length, 2, "astral chars are two UTF-16 units")
+})
+
+test("formatCountdown rounds down to whole minutes", () => {
+  assert.equal(Model.formatCountdown(119), "1")
+  assert.equal(Model.formatCountdown(120), "2")
+})
+
+test("formatCountdown says now for an imminent train", () => {
+  assert.equal(Model.formatCountdown(0), "now")
+  assert.equal(Model.formatCountdown(30), "now")
+})
+
+test("barState badges the next arrival in minutes", () => {
+  const s = snap({ arrivals: [{ routeId: "L", express: false, etaSec: 240 }] })
+  assert.equal(Model.barState(s, NOW).badge, "4")
+})
+
+test("barState shows no badge when nothing is coming", () => {
+  assert.equal(Model.barState(snap({}), NOW).badge, "")
+})
+
+test("barState is ok when all is well", () => {
+  const s = snap({ arrivals: [{ routeId: "L", express: false, etaSec: 240 }] })
+  assert.equal(Model.barState(s, NOW).severity, "ok")
+})
+
+test("barState warns on stale data and keeps the last number", () => {
+  const s = snap({
+    feedTimestamp: NOW - 600,
+    arrivals: [{ routeId: "L", express: false, etaSec: 240 }],
+  })
+  const bar = Model.barState(s, NOW)
+  assert.equal(bar.severity, "warn")
+  assert.equal(bar.badge, "4")
+})
+
+test("barState errors and drops the badge when the feed is unreachable", () => {
+  const bar = Model.barState(snap({ ok: false }), NOW)
+  assert.equal(bar.severity, "error")
+  assert.equal(bar.badge, "")
+})
+
+test("barState warns for an amber alert", () => {
+  const s = snap({ alerts: [{ id: "a", routes: ["L"], alertType: "Delays", periods: [] }] })
+  assert.equal(Model.barState(s, NOW).severity, "warn")
+})
+
+test("barState errors for a red alert", () => {
+  const s = snap({
+    alerts: [{ id: "a", routes: ["L"], alertType: "No Scheduled Service", periods: [] }],
+  })
+  assert.equal(Model.barState(s, NOW).severity, "error")
+})
+
+test("barState stays calm for planned work", () => {
+  const s = snap({
+    arrivals: [{ routeId: "L", express: false, etaSec: 240 }],
+    alerts: [{ id: "p", routes: ["L"], alertType: "Planned - Suspended", periods: [] }],
+  })
+  assert.equal(Model.barState(s, NOW).severity, "ok")
+})
+
+test("tooltipText names the station, direction and next trains", () => {
+  const s = snap({
+    arrivals: [
+      { routeId: "L", express: false, etaSec: 240 },
+      { routeId: "L", express: false, etaSec: 660 },
+    ],
+  })
+  const text = Model.tooltipText(s, NOW)
+  assert.match(text, /Bedford Av/)
+  assert.match(text, /Manhattan/)
+  assert.match(text, /4/)
+})
+
+test("tooltipText names the fault instead of counting when one exists", () => {
+  const s = snap({
+    alerts: [{ id: "a", routes: ["L"], alertType: "Delays",
+               headerText: "[L] trains are running with delays.", periods: [] }],
+  })
+  assert.match(Model.tooltipText(s, NOW), /delays/i)
+})
+
+test("tooltipText says so when no station is saved", () => {
+  assert.match(Model.tooltipText(snap({ station: null, saved: null }), NOW), /no station/i)
+})

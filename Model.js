@@ -166,6 +166,74 @@ function alertsFor(routes, alerts, nowSec) {
   return out
 }
 
+// md-hat_fedora. Built with fromCodePoint, NEVER pasted as a literal: a
+// literal astral character does not survive every editing path, and the
+// failure mode is a widget that is simply invisible with nothing logged.
+var BAR_GLYPH = String.fromCodePoint(0xF0BA4)
+
+var COLOR_WARN = "#e0af68"
+var COLOR_ERROR = "#f7768e"
+
+function formatCountdown(etaSec) {
+  if (etaSec < 60) return "now"
+  return String(Math.floor(etaSec / 60))
+}
+
+function directionLabelOf(station, direction) {
+  if (!station) return ""
+  return direction === "N" ? station.labelN : station.labelS
+}
+
+function worstAlertClass(snapshot, nowSec) {
+  var routes = snapshot.saved ? snapshot.saved.routes : []
+  var live = alertsFor(routes, snapshot.alerts || [], nowSec)
+  var worst = "info"
+  for (var i = 0; i < live.length; i++) {
+    var c = classifyAlert(live[i].alertType)
+    if (c === "red") return "red"
+    if (c === "amber") worst = "amber"
+  }
+  return worst
+}
+
+function barState(snapshot, nowSec) {
+  var badge = ""
+  if (snapshot.ok && snapshot.arrivals && snapshot.arrivals.length > 0) {
+    badge = formatCountdown(snapshot.arrivals[0].etaSec)
+  }
+  if (!snapshot.ok) return { badge: "", severity: "error" }
+  var cls = worstAlertClass(snapshot, nowSec)
+  if (cls === "red") return { badge: badge, severity: "error" }
+  var age = nowSec - snapshot.feedTimestamp
+  if (snapshot.feedTimestamp > 0 && age > snapshot.staleAfterSec) {
+    return { badge: badge, severity: "warn" }
+  }
+  if (cls === "amber") return { badge: badge, severity: "warn" }
+  return { badge: badge, severity: "ok" }
+}
+
+function tooltipText(snapshot, nowSec) {
+  if (!snapshot.saved || !snapshot.station) return "Headway - no station saved"
+  var head = snapshot.station.name + " - " +
+             directionLabelOf(snapshot.station, snapshot.saved.direction)
+  if (!snapshot.ok) return head + " - feed unreachable"
+  var routes = snapshot.saved.routes
+  var live = alertsFor(routes, snapshot.alerts || [], nowSec)
+  for (var i = 0; i < live.length; i++) {
+    var cls = classifyAlert(live[i].alertType)
+    if (cls === "red" || cls === "amber") {
+      return head + " - " + (live[i].headerText || live[i].alertType)
+    }
+  }
+  var arrivals = snapshot.arrivals || []
+  if (arrivals.length === 0) return head + " - no trains scheduled"
+  var mins = []
+  for (var j = 0; j < arrivals.length && j < 3; j++) {
+    mins.push(formatCountdown(arrivals[j].etaSec))
+  }
+  return head + " - " + mins.join(", ") + " min"
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     normalizeRoute: normalizeRoute,
@@ -174,6 +242,13 @@ if (typeof module !== "undefined") {
     arrivalsFor: arrivalsFor,
     classifyAlert: classifyAlert,
     alertIsActive: alertIsActive,
-    alertsFor: alertsFor
+    alertsFor: alertsFor,
+    BAR_GLYPH: BAR_GLYPH,
+    COLOR_WARN: COLOR_WARN,
+    COLOR_ERROR: COLOR_ERROR,
+    formatCountdown: formatCountdown,
+    directionLabelOf: directionLabelOf,
+    barState: barState,
+    tooltipText: tooltipText
   }
 }
