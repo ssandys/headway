@@ -293,11 +293,31 @@ capture, with counts:
 | Sunday Schedule | 2 | info |
 | Station Notice | 1 | info |
 
-**The `Planned - ` prefix is the single most important thing in this table.**
-144 of 199 alerts are planned engineering work, much of it for future
-weekends. Treating them as live disruption would leave the glyph amber
-essentially permanently, which is the same as having no severity signal at
-all. Planned alerts are listed in the panel and never color the bar.
+**Planned engineering work must never colour the bar.** 151 of 195 alerts
+carry the `Planned - ` prefix, much of it for weekends that have not
+happened yet. An implementation that treats them as live disruption leaves
+the glyph permanently lit, which is the same as having no severity signal at
+all. Planned alerts are listed in the panel and never colour the bar.
+
+Two separate mechanisms enforce that, and it is worth being precise about
+which does the work — an earlier draft of this spec was not, and an
+implementer caught it:
+
+- **Exact-key matching does the heavy lifting.** `ALERT_RED` and
+  `ALERT_AMBER` are keyed on whole strings, so no `Planned - …` value
+  matches either one. Delete the prefix branch entirely and today's planned
+  types still classify as `info`, leaving the glyph calm. Measured against
+  the live fixture.
+- **The prefix branch is defence, not the primary guard.** It is checked
+  first, so it survives a future table edit that added a planned variant to
+  either severity set, and it labels planned work distinctly from merely
+  informational work.
+
+The failure this protects against is **keyword matching**, which is the
+natural first instinct — `/Suspend|No Scheduled/` over the raw type string.
+Measured: that design classifies the L's currently-active
+`Planned - Part Suspended` as **red**, a false "no service" alarm generated
+entirely by scheduled weekend work. The exact-key table is what avoids it.
 
 **`active_period` filtering is mandatory** for the same reason: a planned
 alert is published well before it applies. An alert whose active period has
