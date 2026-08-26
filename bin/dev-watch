@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Reinstall on every save. The shell's inotify watcher only follows real paths
+# under ~/.config/omarchy/plugins, so a symlinked source tree would not
+# hot-reload; this copies instead.
+set -euo pipefail
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+"$SRC/bin/dev" deploy
+
+echo "watching $SRC — ctrl-c to stop"
+inotifywait -m -r -q -e close_write,create,delete,move \
+  --exclude '(\.git/|__pycache__|\.pytest_cache|\.superpowers/|\.gitignore)' \
+  "$SRC" | while read -r _; do
+    "$SRC/bin/dev" deploy >/dev/null && echo "reinstalled $(date +%H:%M:%S)"
+  done

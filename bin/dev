@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+# Bring the working tree up as a dev plugin, or take it down again.
+#
+#   bin/dev up      [--dry-run]  deploy, register, enable, restart the shell
+#   bin/dev down    [--dry-run]  disable the dev plugin and restart the shell
+#                                (no-op if nothing to disable)
+#   bin/dev deploy  [--dry-run]  deploy only; never touches the running shell
+#   bin/dev status               report what is deployed, registered, enabled
+#
+# Nothing in this script is plugin-specific. The id and display name come from
+# manifest.json and the files carrying them are globbed, so this file is
+# byte-identical across every plugin and is ported by copying it with no edits.
+# See ssandys/galley: docs/superpowers/specs/2026-08-13-plugin-devkit-design.md
+# -- canonical there; other repos reference it rather than holding a copy.
+set -euo pipefail
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+fail() {
+  echo "dev: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+usage: bin/dev <verb> [--dry-run]
+
+  up      deploy, register, enable the dev plugin, restart the shell
+  down    disable the dev plugin and restart the shell (no-op if nothing
+          to disable)
+  deploy  deploy only; never touches the running shell
+  status  report what is deployed, registered, and enabled
+EOF
+}
+
+manifest_field() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' \
+    "$1" "$2"
+}
+
+# --dry-run is accepted in any position and stripped, matching the plugin's
+# action script under scripts/.
+DRY_RUN=0
+ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then DRY_RUN=1; else ARGS+=("$arg"); fi
+done
+VERB="${ARGS[0]:-}"
+
+# Every side effect routes through here, so a dry run emits the exact command
+# sequence without performing any of it. "$*" flattens arguments, so a dry run
+# renders an argument containing spaces ambiguously while real execution via
+# "$@" stays correct -- the same accepted trade as the action script's --dry-run,
+# recorded in docs/FOLLOWUPS.md. Deliberate; do not "fix" it into a divergence.
+run() {
+  if (( DRY_RUN )); then printf '%s\n' "$*"; else "$@"; fi
+}
+
+# Escape BRE metacharacters, including the / used as sed's delimiter.
+# Escaping only dots is enough for a lookup keyed on a plugin id, but not for
+# an arbitrary display name, which may contain any of these.
+#
+# This escapes the pattern side only. The replacement side ($DEV_ID and
+# "$NAME (dev)" below) is used raw, so a display name containing & or \ would
+# corrupt the rewrite -- not handled here.
+escape_bre() {
+  printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g'
+}
+
+[[ -f "$SRC/manifest.json" ]] || fail "no manifest.json in $SRC"
+ID="$(manifest_field "$SRC/manifest.json" id)"
+NAME="$(manifest_field "$SRC/manifest.json" name)"
+DEV_ID="$ID-dev"
+DEST="$HOME/.config/omarchy/plugins/$DEV_ID"
+
+deploy() {
+  run mkdir -p "$DEST"
+  run rsync -a --delete \
+    --exclude '.git' --exclude 'tests' --exclude 'bin' --exclude 'docs' \
+    --exclude '__pycache__' --exclude '.pytest_cache' --exclude '.github' \
+    --exclude '.superpowers' --exclude '.claude' --exclude '.gitignore' \
+    --exclude 'README.md' --exclude 'AGENTS.md' --exclude 'CONTRIBUTING.md' \
+    "$SRC/" "$DEST/"
+
+  # The registry keys plugins by manifest id, not directory name, and one
+  # third-party plugin claiming another's id silently overwrites it in the map
+  # rather than warning (PluginRegistry.qml, parseScanOutput). So the dev copy
+  # needs its own id -- rewritten here, in the deployed copy, to keep the
+  # source tree canonical and `git status` clean.
+  #
+  # Both substitutions tolerate already-rewritten input, so a run that finds
+  # stale output in $DEST cannot compound it into `-dev-dev`.
+  local id_re name_re rewrite
+  id_re="$(escape_bre "$ID")"
+  name_re="$(escape_bre "$NAME")"
+  # The name substitution anchors on the CLOSING quote, not the opening one, so
+  # it catches a padded panel title -- two leading spaces then the name -- as
+  # well as the bare literals.
+  rewrite="s/$id_re\(-dev\)\?/$DEV_ID/g; s/$name_re\( (dev)\)\?\"/$NAME (dev)\"/g"
+  # Every top-level QML file, not a named one. A hardcoded list silently
+  # narrows every time the code is refactored: a sibling plugin's identity
+  # rewrite missed a QML file extracted after the list was written, leaving
+  # its dev copy sending notifications branded identically to the published
+  # plugin -- with no test able to see the omission.
+  # Every deployed TEXT file, derived -- not a list of names, and not a list of
+  # extensions either. A hardcoded list silently narrows every time the code is
+  # refactored, and it has done so twice: first a sibling plugin's rewrite named
+  # Panel.qml and missed a QML file extracted after the list was written, so its
+  # dev copy's notifications were branded as the published plugin; then the
+  # *.qml glob that fixed it missed a deployed Model.js, so the same plugin's
+  # bar tooltip read the published name before its first snapshot arrived.
+  # Neither the deploy nor verify() could see past it, because both were scoped
+  # to the same glob. A file-type list narrows for the same reason a file-name
+  # list does, so there is no list.
+  if (( DRY_RUN )); then
+    # A dry run deploys nothing, so no file list exists to derive. Naming the
+    # intent beats globbing a previous deploy's leftovers and calling it a
+    # preview.
+    run sed -i "$rewrite" "$DEST/<every deployed text file>"
+    return 0
+  fi
+
+  local -a targets=()
+  readarray -t targets < <(deployed_text_files)
+  # Guarded, and not only for tidiness: `grep -Fl PATTERN` with zero file
+  # arguments reads stdin and hangs forever. verify() below passes this array
+  # straight to grep, so an empty list would turn a failed deploy into a
+  # wedged one.
+  (( ${#targets[@]} )) ||
+    fail "no deployed text files found under $DEST -- did the rsync run?"
+  sed -i "$rewrite" "${targets[@]}"
+  verify "${targets[@]}"
+}
+
+# Every deployed file grep is willing to treat as text, one per line. `grep -I`
+# reports a binary file as non-matching, which is what keeps preview.png and
+# friends out of sed's path now that the rewrite is no longer confined to *.qml.
+# `find -exec ... +` runs no grep at all when nothing matches, so this cannot
+# fall through to reading stdin.
+deployed_text_files() {
+  find "$DEST" -type f -exec grep -Il . {} + 2>/dev/null || true
+}
+
+verify() {
+  # A no-op sed would deploy a second plugin claiming the published id -- the
+  # exact silent collision this is here to avoid -- so prove the rewrite landed
+  # rather than trusting it.
+  local deployed_id stale
+  deployed_id="$(manifest_field "$DEST/manifest.json" id)"
+  [[ "$deployed_id" == "$DEV_ID" ]] ||
+    fail "deployed manifest id is '$deployed_id', expected '$DEV_ID'"
+
+  # Checked across the files passed in -- the same set the rewrite just covered
+  # -- so be honest about what this proves: it confirms the sed landed, and it
+  # is NOT an independent net. Once the rewrite reaches every deployed text
+  # file there is nothing left for a broader assert to find, so the leak class
+  # is closed by the rewrite's completeness, not by this check's breadth. Its
+  # value is catching a rewrite that silently stopped working.
+  #
+  # These mirror the sed's own quote anchors, so they discriminate rewritten
+  # from unrewritten without any escaping: "$ID" does not match "$DEV_ID", and
+  # $NAME" does not match $NAME (dev)". grep exits 1 on no match, which is the
+  # success case here, hence `|| true` under `set -e`.
+  stale="$(grep -Fl "\"$ID\"" "$@" || true)"
+  [[ -z "$stale" ]] ||
+    fail "deployed files still claim the published id: $stale"
+
+  stale="$(grep -Fl "$NAME\"" "$@" || true)"
+  [[ -z "$stale" ]] ||
+    fail "deployed files still carry the published name: $stale"
+}
+
+up() {
+  deploy
+  # Registering a NEW id needs an explicit rescan. Code hot-reload under
+  # ~/.config/omarchy/plugins/ is automatic -- that is what bin/dev-watch
+  # relies on -- but `omarchy plugin enable` exits 1 on an id the registry has
+  # never seen, and its own error message names rescanPlugins as the fix. The
+  # documented install sequence is put-files, rescan, enable, in that order.
+  run omarchy-shell shell rescanPlugins
+  # rescanPlugins is fire-and-forget over IPC: the call above returns before
+  # the shell finishes re-walking the plugin directories in the background.
+  # Measured on this machine, the registry catches up a few hundred
+  # milliseconds (~373ms) after the call returns, and `enable` used to run
+  # microseconds later -- so every first-ever deploy of a fresh clone lost
+  # that race and failed with omarchy's own "is not known; run:
+  # rescanPlugins" error, even though the rescan had, in fact, already been
+  # run moments earlier. This is the bug live verification caught on a
+  # genuinely cold start, reproduced twice; no --dry-run test could see it,
+  # since --dry-run only inspects printed strings and skips the wait below
+  # entirely -- there is nothing deployed or rescanned to wait for, and
+  # polling here would either hang against the real registry or print a line
+  # the dry-run tests don't expect.
+  (( DRY_RUN )) || wait_for_registration
+  # No placement argument: manifest.json's barWidget.defaultSection already
+  # declares it and `enable` honours it, so a down/up cycle restores the widget
+  # unaided. Passing one on every `up` would overwrite a hand-moved position.
+  run omarchy plugin enable "$DEV_ID"
+  run omarchy restart shell
+  (( DRY_RUN )) || {
+    echo "up -> $DEST"
+    echo "  id: $DEV_ID   toggle: omarchy-shell shell toggle $DEV_ID"
+  }
+}
+
+# Prints exactly one of: enabled, disabled, absent.
+#
+# DEV_STATE_FIXTURE substitutes for the live registry query so tests can drive
+# all three branches deterministically, the same way the collector's fixture
+# environment variable substitutes for ipptool in the collector. Test-only;
+# unset in normal use.
+plugin_state() {
+  if [[ -n "${DEV_STATE_FIXTURE:-}" ]]; then
+    printf '%s\n' "$DEV_STATE_FIXTURE"
+    return 0
+  fi
+  # Checked explicitly rather than left to `set -e`: every caller assigns
+  # this function's command-substituted output to a variable, which runs it
+  # in a subshell that bash does not carry errexit into by default. Left
+  # unchecked, a failing `omarchy` here leaves $json empty, `jq -e` exits
+  # non-zero, and the `!` below reads that as a genuine "absent" -- so `down`
+  # would report the dev copy torn down while it is, in fact, still enabled.
+  local json
+  if ! json="$(omarchy plugin list --json)"; then
+    fail "could not query the plugin registry: 'omarchy plugin list --json' failed"
+  fi
+  if ! jq -e . >/dev/null 2>&1 <<<"$json"; then
+    fail "could not query the plugin registry: 'omarchy plugin list --json' did not return valid JSON"
+  fi
+  if ! jq -e --arg id "$DEV_ID" 'any(.[]; .id == $id)' >/dev/null <<<"$json"; then
+    printf 'absent\n'
+  elif jq -e --arg id "$DEV_ID" 'any(.[]; .id == $id and .enabled)' \
+       >/dev/null <<<"$json"; then
+    printf 'enabled\n'
+  else
+    printf 'disabled\n'
+  fi
+}
+
+# Polls plugin_state() until the rescan's background re-walk has caught up
+# and the registry reports something other than "absent", rather than
+# trusting that a returned IPC call means the shell is actually done -- see
+# the comment above the call site in up() for why that assumption used to
+# fail. Reuses plugin_state() rather than querying the registry a second
+# way, which is also what makes this testable: DEV_STATE_FIXTURE and the
+# PATH-shim tests in tests/test_dev.py both drive it through there.
+#
+# Bounded so a genuine problem -- the id truly never registers -- surfaces
+# as a clear error instead of hanging forever or falling through to
+# omarchy's own, less helpful one.
+#
+# DEV_WAIT_TIMEOUT overrides the timeout below, in seconds; test-only,
+# unset in normal use, in the same spirit as DEV_STATE_FIXTURE.
+wait_for_registration() {
+  local timeout="${DEV_WAIT_TIMEOUT:-10}" interval=0.1
+  # interval is 0.1s, i.e. 10 iterations per second of $timeout.
+  local max_iters=$(( timeout * 10 ))
+  local iter=0
+  while [[ "$(plugin_state)" == "absent" ]]; do
+    (( iter >= max_iters )) &&
+      fail "$DEV_ID never registered in the plugin registry after rescanPlugins (waited ${timeout}s) -- the rescan's background re-walk may not have finished, or the id is still unknown to it"
+    sleep "$interval"
+    # Not `(( iter++ ))`: that post-increment evaluates to iter's old value,
+    # which is 0 on the first pass, and a bare `(( expr ))` that evaluates to
+    # 0 is a false command -- under `set -e` that silently kills the script
+    # after exactly one iteration, with no fail() message at all. A plain
+    # assignment's exit status doesn't depend on the value it assigns.
+    iter=$(( iter + 1 ))
+  done
+}
+
+down() {
+  # Captured into a variable first, not inlined as `case "$(plugin_state)"`:
+  # that would put plugin_state's own fail() call inside the case word's
+  # command-substitution subshell, where its exit status is discarded rather
+  # than propagated. Assigning it as its own statement here lets a query
+  # failure abort `down` the normal way.
+  local state
+  state="$(plugin_state)"
+  # Guard on registration, not enablement: `omarchy plugin disable` returns ok
+  # for a known-but-disabled plugin and exits 1 only for an id the registry
+  # does not know. Unguarded under `set -e` that aborts before the restart.
+  #
+  # Neither no-op branch restarts the shell. A restart flickers the whole bar
+  # and closes any open panels, which is too rude for "there was nothing to do".
+  case "$state" in
+    absent)
+      echo "dev: $DEV_ID is not registered; nothing to take down"
+      return 0
+      ;;
+    disabled)
+      echo "dev: $DEV_ID is already disabled; nothing to take down"
+      return 0
+      ;;
+    enabled)
+      ;;
+    *)
+      # No fall-through to "act": an unrecognised state must not default to
+      # disable-and-restart. Without this arm, a typo, an unexpected-case
+      # fixture, or a future fourth state all fell through the guard above
+      # into the same path as a genuine "enabled", disabling and restarting
+      # the shell for a state this script does not actually understand.
+      fail "unexpected registry state '$state' for $DEV_ID"
+      ;;
+  esac
+  # $DEST is deliberately left in place: it preserves the dev copy's settings,
+  # and rsync --delete already makes the next `up` idempotent over it.
+  run omarchy plugin disable "$DEV_ID"
+  run omarchy restart shell
+}
+
+status() {
+  local deployed="no" state
+  [[ -d "$DEST" ]] && deployed="yes ($DEST)"
+  # Captured first for the same reason as in down(): inlined into the echo
+  # below, plugin_state's own fail() would run inside that interpolation's
+  # command-substitution subshell and its exit status would never surface.
+  state="$(plugin_state)"
+  echo "id:        $DEV_ID"
+  echo "deployed:  $deployed"
+  echo "registry:  $state"
+}
+
+case "$VERB" in
+  deploy) deploy ;;
+  up) up ;;
+  down) down ;;
+  status) status ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+  *)
+    echo "dev: unknown verb '$VERB'" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
