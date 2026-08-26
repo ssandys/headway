@@ -4,16 +4,15 @@ const assert = require("node:assert/strict")
 
 const { STATIONS } = require("../StationData.js")
 const Stations = require("../Stations.js")
-Stations.load(STATIONS)
 
 const UNION_SQ = { lat: 40.735736, lon: -73.990568 }
 
 test("byId finds a station", () => {
-  assert.equal(Stations.byId("L08").name, "Bedford Av")
+  assert.equal(Stations.byId(STATIONS, "L08").name, "Bedford Av")
 })
 
 test("byId returns null for an unknown id", () => {
-  assert.equal(Stations.byId("NOPE"), null)
+  assert.equal(Stations.byId(STATIONS, "NOPE"), null)
 })
 
 test("platformId composes the feed's stop id", () => {
@@ -32,13 +31,13 @@ test("parentOf leaves an already-parent id alone", () => {
 
 test("haversineKm measures a known distance", () => {
   // Union Sq to Bedford Av is roughly 2.5 km as the crow flies
-  const bedford = Stations.byId("L08")
+  const bedford = Stations.byId(STATIONS, "L08")
   const d = Stations.haversineKm(UNION_SQ.lat, UNION_SQ.lon, bedford.lat, bedford.lon)
   assert.ok(d > 1.5 && d < 4, `expected 1.5-4 km, got ${d}`)
 })
 
 test("search with no query returns the nearest stations first", () => {
-  const results = Stations.search("", UNION_SQ, 5)
+  const results = Stations.search(STATIONS, "", UNION_SQ, 5)
   assert.equal(results.length, 5)
   for (let i = 1; i < results.length; i++) {
     assert.ok(results[i].distanceKm >= results[i - 1].distanceKm,
@@ -47,12 +46,12 @@ test("search with no query returns the nearest stations first", () => {
 })
 
 test("search matches on name, case-insensitively", () => {
-  const results = Stations.search("bedford", UNION_SQ, 10)
+  const results = Stations.search(STATIONS, "bedford", UNION_SQ, 10)
   assert.ok(results.some((s) => s.id === "L08"))
 })
 
 test("search for an ambiguous name returns every candidate", () => {
-  const results = Stations.search("86 St", UNION_SQ, 20)
+  const results = Stations.search(STATIONS, "86 St", UNION_SQ, 20)
   const exact = results.filter((s) => s.name === "86 St")
   assert.equal(exact.length, 6, "all six 86 St stations are offered")
   // and each is distinguishable
@@ -71,7 +70,7 @@ test("search groups stations sharing a complex adjacently", () => {
   // implementation that only sorts fails this test. A query like "Times Sq",
   // whose every match already shares one complex, would pass with no grouping
   // logic whatsoever and prove nothing.
-  const results = Stations.search("42 St", null, 20)
+  const results = Stations.search(STATIONS, "42 St", null, 20)
   const ids = results.map((s) => s.complexId)
   for (const c of new Set(ids)) {
     const idx = ids.map((v, i) => (v === c ? i : -1)).filter((i) => i >= 0)
@@ -81,13 +80,13 @@ test("search groups stations sharing a complex adjacently", () => {
 })
 
 test("search works with no origin, falling back to alphabetical", () => {
-  const results = Stations.search("", null, 5)
+  const results = Stations.search(STATIONS, "", null, 5)
   assert.equal(results.length, 5)
   for (const r of results) assert.equal(r.distanceKm, null)
 })
 
 test("directionsFor offers rider-facing labels", () => {
-  const dirs = Stations.directionsFor(Stations.byId("L08"))
+  const dirs = Stations.directionsFor(Stations.byId(STATIONS, "L08"))
   assert.deepEqual(dirs.map((d) => d.dir), ["N", "S"])
   assert.equal(dirs[0].label, "Manhattan")
 })

@@ -15,7 +15,6 @@ const Gtfs = require_("../Gtfs.js");
 const Model = require_("../Model.js");
 const Stations = require_("../Stations.js");
 const { STATIONS } = require_("../StationData.js");
-Stations.load(STATIONS);
 
 const STATE = join(process.env.HOME, ".local/state/omarchy/settings/headway.json");
 
@@ -97,10 +96,10 @@ try {
   const trips = Model.dedupeTrips(lists);
   const now = Math.floor(Date.now() / 1000);
 
-  snapshot.station = Stations.byId(active.stopId);
+  snapshot.station = Stations.byId(STATIONS, active.stopId);
   snapshot.arrivals = Model.arrivalsFor(active, trips, now).map((a) => ({
     ...a,
-    destination: (Stations.byId(Stations.parentOf(a.destinationStopId)) || {}).name || null,
+    destination: (Stations.byId(STATIONS, Stations.parentOf(a.destinationStopId)) || {}).name || null,
     countdown: Model.formatCountdown(a.etaSec),
   }));
 

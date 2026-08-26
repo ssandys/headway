@@ -1,15 +1,24 @@
 // Queries over the generated station table.
 //
 // Loaded by Panel.qml/Service.qml AND by node --test. Pure: no I/O, no QML
-// imports, no state between calls beyond the table handed to load(). Top level
-// is `var`/`function` only -- no arrow functions, spread, template literals,
-// let/const, Object.assign, .includes( or .endsWith(.
+// imports, no state between calls. Top level is `var`/`function` only -- no
+// arrow functions, spread, template literals, let/const, Object.assign,
+// .includes( or .endsWith(.
 //
-// QML cannot import one .js from another, so the table is injected:
-//   QML  -> Stations.load(StationData.STATIONS)
-//   node -> the same call, from the test or from collect.mjs
-
-var TABLE = []
+// THIS FILE HOLDS NO STATE, and that is load-bearing rather than stylistic.
+// Measured in a headless qml6 engine:
+//
+//   1. Without `.pragma library`, every QML component that imports a .js file
+//      gets its OWN instance. A table loaded by Service.qml would be
+//      invisible to Panel.qml — byId() null, search() empty, picker dead.
+//   2. `.pragma library` shares the instance, but node cannot parse it
+//      ("Unexpected token '.'"), which would end this file's test coverage.
+//   3. Component.onCompleted is too late anyway: a Repeater's `model:`
+//      binding evaluates BEFORE its own component's onCompleted.
+//
+// So the table is passed in per call. Two functions need it — byId and
+// search. The other five are pure already. No initialisation order exists to
+// get wrong, and both engines give the same answer.
 
 var BOROUGHS = {
   "M": "Manhattan", "Bk": "Brooklyn", "Q": "Queens",
@@ -20,17 +29,10 @@ var BOROUGHS = {
 // that way, so it is never offered as a choice.
 var TERMINAL_LABEL = "Last Stop"
 
-function load(stations) {
-  TABLE = stations || []
-}
-
-function all() {
-  return TABLE
-}
-
-function byId(id) {
-  for (var i = 0; i < TABLE.length; i++) {
-    if (TABLE[i].id === id) return TABLE[i]
+function byId(stations, id) {
+  var table = stations || []
+  for (var i = 0; i < table.length; i++) {
+    if (table[i].id === id) return table[i]
   }
   return null
 }
@@ -80,12 +82,13 @@ function directionsFor(station) {
 // distance when an origin is known, alphabetically otherwise -- then grouped
 // so stations sharing a complex stay adjacent, since scattering them across
 // the list is exactly what makes an ambiguous name hard to resolve.
-function search(query, origin, limit) {
+function search(stations, query, origin, limit) {
+  var table = stations || []
   var needle = (query || "").toLowerCase()
   var rows = []
   var i
-  for (i = 0; i < TABLE.length; i++) {
-    var s = TABLE[i]
+  for (i = 0; i < table.length; i++) {
+    var s = table[i]
     if (needle && s.name.toLowerCase().indexOf(needle) < 0) continue
     rows.push({
       id: s.id, name: s.name, routes: s.routes, borough: s.borough,
@@ -124,7 +127,7 @@ function search(query, origin, limit) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    load: load, all: all, byId: byId, platformId: platformId,
+    byId: byId, platformId: platformId,
     parentOf: parentOf, haversineKm: haversineKm, boroughName: boroughName,
     directionsFor: directionsFor, search: search
   }
