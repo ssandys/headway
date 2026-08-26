@@ -520,7 +520,12 @@ alert headline when one is active on a saved route.
 - **Stations** — the saved list; click to activate, `✕` to remove.
 - **Search** — a text field filtering all 496 stations by name. Its empty
   state lists the nearest first, by haversine distance from the Omarchy
-  location. Selecting one opens a route/direction choice, then saves it.
+  location. Selecting one opens a route/direction choice, then saves it
+  **and makes it active** — amended after live use. Saving without activating
+  left the panel on the previously active station, so the click read as dead
+  and took a second one on the saved row to finish the job. Picking a station
+  AND a direction is an unambiguous choice; the saved list remains the way to
+  switch between stations already added.
 
   **Every result row must carry its routes, borough and line**, because 76
   names are ambiguous and six of them read exactly `86 St` (finding 19). A
