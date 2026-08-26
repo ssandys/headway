@@ -67,11 +67,12 @@ valid one. Recorded so it is a decision rather than an oversight.
 
 ## Documentation
 
-**S3 — `preview.png` predates two features the README describes in bold.** The
-image was captured before the route filter and the direction toggle existed, so
-its saved rows have no direction button and its search rows show no filter
-affordance. **Recapture before the marketplace listing goes live** — this is the
-hero image a reader sees first.
+**S3 — RESOLVED at v0.1.0.** `preview.png` was recaptured on 2026-08-26 from
+the released build installed as `ssandys.headway` v0.1.0 (commit `29e286c`,
+`Panel.qml` byte-identical to source) rather than from the dev deployment, so
+the header reads `Headway` and not `Headway (dev)`. It now shows the route
+bullets on alert rows and the direction button on every saved row, both of which
+the README describes.
 
 **S4 — "195 alerts filter down to 7" in `AGENTS.md` is not reproducible.**
 Measured at the fixture's own header timestamp (1787689797): **9** active, of

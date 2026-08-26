@@ -7,20 +7,23 @@ stations you've saved, with MTA service alerts for the lines you actually ride.
 literally the number the widget puts in the bar.
 
 ![The Headway widget and its panel. In the bar, a conductor glyph carries a
-small circular badge reading 3 — three minutes to the next train. The open
-panel below is headed "Headway" with "updated 55s ago" on the right. Under it,
-the active station "Franklin Av-Medgar Evers College" with its direction filter
+small circular badge reading 3 — three minutes to the next train. The open panel
+below is headed "Headway" with "updated 18s ago" on the right. Under it, the
+active station "Franklin Av-Medgar Evers College" with its direction filter
 "Manhattan", then three arrivals, each a coloured MTA route bullet, a
-destination and a countdown: a red 2 to Wakefield-241 St in 3 minutes, a green
-4 to Woodlawn in 21, a red 2 to Wakefield-241 St in 24. Below those, two live
-service alerts in amber: no overnight 5 between Dyre Av and E 180 St, and
-Woodlawn-bound 4 trains skipping Burnside Av. Then the saved-station list —
-Franklin Av-Medgar Evers College with red 2 and 3 and green 4 and 5 bullets,
-14 St-Union Sq with green 4, 5 and 6, Brooklyn Bridge-City Hall with green 4, 5
-and 6 — each with an ✕ to remove it. At the bottom, a search box reading "Add a
-station" and six nearby results with their route bullets, borough and distance
-in miles, each offering two direction buttons such as Uptown and
-Downtown.](preview.png)
+destination and a countdown: a green 4 to Woodlawn in 3 minutes, a green 5 to
+Eastchester-Dyre Av in 5, a red 3 to Harlem-148 St in 7. Below those, three live
+service alerts, each prefixed with the route bullet it belongs to — a red 2 for
+Manhattan-bound 2 and 5 trains running express from E 180 St, a green 4 in amber
+for 4, 5 and 6 delays after a signal problem at 86 St, and a green 4 for no
+service between Kingsbridge Rd and Woodlawn. Then the saved-station list — four
+rows, each with its name, its coloured route bullets, its current direction as a
+button, and an ✕ to remove it: Franklin Av-Medgar Evers College with red 2 and
+3 and green 4 and 5 set to Manhattan, 14 St-Union Sq with green 4, 5 and 6 set
+to Downtown, Brooklyn Bridge-City Hall likewise, and Fulton St with green 4 and
+5. At the bottom, a search box reading "Add a station" and seven nearby results
+with their route bullets, borough and distance in miles, each offering its
+available direction buttons such as Uptown and Downtown.](preview.png)
 
 ## Prerequisites
 
