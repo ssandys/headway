@@ -507,3 +507,23 @@ test("toggleRoute ignores a route the station does not serve", () => {
   const all = ["4", "6"]
   assert.deepEqual(Model.toggleRoute(all, all, "Q"), ["4", "6"])
 })
+
+test("nextDirection cycles only through directions the station actually has", () => {
+  // 33 stations are terminals with a single usable direction -- Van Cortlandt
+  // Park-242 St, South Ferry, Wakefield-241 St. A naive N<->S flip would set
+  // one of those to a direction with no trains, and the widget would sit blank
+  // forever with nothing explaining why.
+  assert.equal(Model.nextDirection(["N", "S"], "N"), "S")
+  assert.equal(Model.nextDirection(["N", "S"], "S"), "N", "and wraps back")
+  assert.equal(Model.nextDirection(["S"], "S"), "S", "a terminal cannot flip")
+  assert.equal(Model.nextDirection(["N"], "N"), "N")
+})
+
+test("nextDirection is safe on junk rather than inventing a direction", () => {
+  // `available` comes from the station table and `current` from the state file,
+  // and this is read inside a click handler on a row built from both.
+  assert.equal(Model.nextDirection([], "N"), "N", "no options, no change")
+  assert.equal(Model.nextDirection(["N", "S"], "Q"), "N",
+    "an unknown current direction falls to the first available")
+  assert.equal(Model.nextDirection(null, "S"), "S")
+})

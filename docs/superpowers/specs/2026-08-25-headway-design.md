@@ -145,6 +145,17 @@ therefore the case that did not work -- saving Union Sq watched every route
 serving it. This was not a decision anyone made; it is absent from this section
 because nobody noticed, and the README advertised it regardless.
 
+**A saved row's direction is shown and switchable.** Added on request after the
+route filter landed. A saved row previously did not say which way it pointed at
+all -- the direction appeared only in the header, and only for the active
+station -- and changing it meant searching the station out again.
+
+`Model.nextDirection` cycles through the directions a station ACTUALLY has,
+which is not an N/S flip: 33 stations are terminals with one usable direction,
+and flipping one lands on a direction with no trains, leaving the widget blank
+with nothing to explain it. Those rows show their single direction greyed and do
+not respond.
+
 It is now the search result's route bullets: every route starts selected,
 clicking one excludes it, dimmed means excluded, and the direction button saves
 the selection. `Model.toggleRoute` owns the rules -- the station's own route

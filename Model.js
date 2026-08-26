@@ -258,6 +258,26 @@ function formatCountdown(etaSec) {
 // exactly the state that matters most. The panel's arrival rows keep the word,
 // where there is room for it and it reads better than a symbol. Collapsing
 // these two back into one function reintroduces the clipping.
+// Cycles a saved station's direction through the ones it ACTUALLY has.
+//
+// Not an N<->S flip. 33 stations are terminals with a single usable direction --
+// Van Cortlandt Park-242 St, South Ferry, Wakefield-241 St -- and flipping one
+// of those lands on a direction with no trains, leaving the widget blank with
+// nothing to explain it. `available` comes from Stations.directionsFor, which
+// already excludes the terminal label.
+//
+// An unrecognised current direction falls to the first available rather than
+// staying put, so a state file carrying a stale direction can be corrected by
+// clicking rather than by deleting the station.
+function nextDirection(available, current) {
+  var dirs = available || []
+  if (dirs.length < 2) return current
+  for (var i = 0; i < dirs.length; i++) {
+    if (dirs[i] === current) return dirs[(i + 1) % dirs.length]
+  }
+  return dirs[0]
+}
+
 // The per-station route filter. Returns the selection with `route` toggled,
 // rebuilt in the STATION's own route order rather than appended -- so
 // deselecting the 5 at Union Sq and putting it back gives 4,5,6 again and not
@@ -407,6 +427,7 @@ if (typeof module !== "undefined") {
     feedAgeText: feedAgeText,
     distanceText: distanceText,
     toggleRoute: toggleRoute,
+    nextDirection: nextDirection,
     directionLabelOf: directionLabelOf,
     barState: barState,
     tooltipText: tooltipText

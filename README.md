@@ -81,6 +81,7 @@ opening anything.
 | `r` | Refresh now |
 | `Esc` | Close the panel — or, while the search box has focus, clear the search and leave the box |
 | Click a saved station's name | Make it the active station |
+| Click a saved station's direction | Switch it to the other direction. Terminals show one direction and are not clickable |
 | Click a saved station's `✕` | Remove it |
 | Type in the search box | Filter all 496 stations by name |
 | Click a route bullet on a result | Include or exclude that route for the station you are about to save |
@@ -90,6 +91,12 @@ The panel shows, top to bottom: the active station and its direction filter;
 the next few arrivals, each with a coloured route bullet, its destination and a
 countdown; any live alerts for your saved routes; your saved stations; and the
 search box.
+
+**Each saved row carries its own direction, and clicking it switches.** So one
+station saved twice — Union Sq inbound and Union Sq outbound — is not needed for
+a commute you ride both ways. 33 stations are terminals with only one usable
+direction; those show it greyed and do not respond, because pointing a terminal
+the other way would leave the widget blank with nothing to explain it.
 
 **Route bullets follow the MTA's colours,** and an express train gets a diamond
 where a local gets a disc. Colour means *identity* here and never severity —

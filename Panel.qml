@@ -373,6 +373,49 @@ Panel {
             }
           }
           Item { Layout.fillWidth: true }
+
+          // The direction, shown AND clickable. Previously a saved row did not
+          // say which way it was pointed at all -- you had to read the header,
+          // and only for the active station -- and changing it meant searching
+          // the station out again.
+          //
+          // Model.nextDirection, never an N<->S flip: 33 stations are terminals
+          // with one usable direction, and flipping one lands on a direction
+          // with no trains, leaving the widget blank with nothing to explain it.
+          // Those rows show their single direction and are not clickable.
+          Button {
+            id: dirToggle
+            readonly property var station:
+              Stations.byId(StationData.STATIONS, savedRow.modelData.stopId)
+            readonly property var options:
+              dirToggle.station ? Stations.directionsFor(dirToggle.station) : []
+            visible: !!dirToggle.station
+            text: Model.directionLabelOf(dirToggle.station,
+                                         savedRow.modelData.direction)
+            enabled: dirToggle.options.length > 1
+            opacity: enabled ? 1.0 : 0.45
+            tooltipText: enabled ? "Switch direction"
+                                 : "This station is a terminal -- one direction only"
+            fontSize: Style.font.caption
+            horizontalPadding: Style.space(6)
+            verticalPadding: Style.space(2)
+            onClicked: {
+              var dirs = []
+              for (var i = 0; i < dirToggle.options.length; i++) {
+                dirs.push(dirToggle.options[i].dir)
+              }
+              // saveStation's update branch rewrites in place, then activates
+              // and refreshes -- so the arrival rows and the bar follow the new
+              // direction immediately instead of at the next poll.
+              service.saveStation({
+                stopId: savedRow.modelData.stopId,
+                name: savedRow.modelData.name,
+                routes: savedRow.modelData.routes,
+                direction: Model.nextDirection(dirs, savedRow.modelData.direction)
+              })
+            }
+          }
+
           Button {
             text: "✕"
             onClicked: service.removeStation(savedRow.modelData.stopId)
