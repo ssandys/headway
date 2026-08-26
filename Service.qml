@@ -95,7 +95,21 @@ Item {
     printErrors: false
     atomicWrites: true
     onLoaded: root.loadState()
-    onFileChanged: root.loadState()
+    // Our own writeState fires this watcher, and FileView.text() still returns
+    // the PREVIOUS file content when it does. MEASURED: saving a fourth station
+    // logged `writeState stations=4 active=L14` and then, in the same second,
+    // `loadState -> stations=3 active=640` -- the reload silently undoing the
+    // save. That is why adding a station appeared to need two clicks. The first
+    // was reverted, and the second only worked because by then the first
+    // write had reached the disk.
+    //
+    // The flag is CONSUMED, not latched: exactly one event is skipped per
+    // write, so a genuine external edit is still picked up by the next one.
+    // A latch would turn one failed write into permanently deaf file watching.
+    onFileChanged: {
+      if (root.selfWrite) { root.selfWrite = false; return }
+      root.loadState()
+    }
     onLoadFailed: { root.stations = []; root.activeStationId = "" }
   }
 
@@ -110,7 +124,12 @@ Item {
     }
   }
 
+  // Set immediately before every setText, and consumed by the first watcher
+  // event that follows it. See stateFile.onFileChanged.
+  property bool selfWrite: false
+
   function writeState() {
+    root.selfWrite = true
     stateFile.setText(JSON.stringify({
       version: 1, activeStationId: root.activeStationId, stations: root.stations
     }, null, 2) + "\n")

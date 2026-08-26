@@ -102,9 +102,9 @@ test("utf8 decodes a 4-byte (astral) sequence", () => {
   // U+F0BA4 -- md-hat_fedora, the plugin's own bar glyph -- so this case
   // doubles as proof the engine round-trips the exact codepoint Model.js
   // builds in a later task.
-  const bytes = u8(0xf3, 0xb0, 0xae, 0xa4)
+  const bytes = u8(0xf3, 0xb1, 0x8c, 0x88)
   const decoded = Gtfs.utf8(bytes, 0, bytes.length)
-  assert.equal(decoded.codePointAt(0), 0xF0BA4)
+  assert.equal(decoded.codePointAt(0), 0xF1308)
   assert.equal(decoded.length, 2, "an astral char is two UTF-16 units")
 })
 

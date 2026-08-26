@@ -43,7 +43,7 @@ future reader doesn't reopen a closed question.
 | Alerts | In MVP; drive glyph color and a panel list | The alerts feed is keyless and carries rider-readable text. It gives the glyph something real to encode; without it, color would only ever mean "feed broken". Severity comes from the Mercury extension, not GTFS `effect` — see "Alert severity". |
 | Notifications | New route alert; feed stale/unreachable | Leave-now was considered and cut — it needs a per-station walking-time setting, which is scope the MVP doesn't need to carry. |
 | Data layer | Pure QML/JS, no interpreter | See below. |
-| Icon | `md-hat_fedora`, U+F0BA4 | Nerd Fonts has no derby or bowler; the fedora is the closest silhouette and the only hat that stays legible at 17px. |
+| Icon | `md-account_tie_voice`, U+F1308 | A conductor announcing the next stop. Superseded the fedora once the font's own glyph names were read rather than guessed at — see Amendments. |
 
 ### Why there is no collector script
 
@@ -82,6 +82,72 @@ small node CLI that imports **the same** `Gtfs.js` decoder and prints the
 same snapshot — a shared code path rather than a parallel reimplementation,
 which is strictly better than what it replaces.
 
+## Amendments after live use
+
+Made on 2026-08-26, once the widget was running against real feeds. Each
+replaces a decision above rather than sitting beside it.
+
+**The icon is `md-account_tie_voice` (U+F1308), not `md-hat_fedora`.** The
+Decisions table's stated reason for the fedora -- that Nerd Fonts has no derby
+or bowler -- was true but answered the wrong question. Reading the installed
+font's `post` table rather than guessing at codepoints turned up a family the
+original `hat|derby|bowler|boater|trilby` grep could never have found:
+`md-account_tie_hat`, `md-account_tie` and `md-account_tie_voice`. A conductor
+is a better sign for a train than a hat is. All three were verified present in
+VictorMono Nerd Font's cmap, which is what `monospace` resolves to here.
+
+**The bar badge is an overlay, not appended text.** It was
+`BAR_GLYPH + "  " + badge` in one label, which made the button's width a
+function of the countdown -- so every minute boundary resized the widget and
+shoved its neighbours along the bar. It is now galley's `BorderSurface` circle
+anchored off `glyphPaintedWidth`, and the button's width is constant.
+
+That circle holds two characters, so `Model.badgeText` returns `\u2022` for a
+train under a minute out. `formatCountdown` is deliberately left alone and
+still returns `now` for the panel rows, where there is room for the word.
+Collapsing the two back into one function reintroduces the clipping.
+
+**Route bullets are coloured, in the panel only.** The Decisions table rejected
+coloured route bullets, on the grounds that colour would mean identity in one
+place and severity everywhere else. That reasoning is sound and still binds
+**the bar**, which is unchanged: the glyph carries severity, and the badge
+carries only a number. The bullets live in the panel's arrival rows, saved list
+and search results, where nothing encodes severity by colour and the route set
+is what distinguishes six stations all called `86 St`. Local trains get a disc
+and express trains a diamond -- the MTA's own convention, replacing the `X`
+that used to be appended to the route id.
+
+Text colour on a bullet is derived from the disc's luminance, not a per-route
+table. Measured: maximising WCAG contrast puts BLACK text on the red 1/2/3
+bullet (5.19 against white's 4.05), and on the green, the orange and the
+shuttle grey -- mathematically better and visibly wrong. A luminance threshold
+of 0.35 gives the right answer for every route, and it sits in an empty band
+between the orange at 0.303 and the light grey at 0.396 rather than on a knife
+edge. This agrees with the MTA everywhere except the G and the L, where the MTA
+prints white on a disc too light to carry it; at caption size legibility
+outranks brand fidelity.
+
+**The panel has a plugin header.** Icon and name on the left, data age on the
+right, then a separator -- the shape galley and colophon both use. The age
+string comes from `Model.feedAgeText`, which switches from `updated 45s ago` to
+`stale - 6m old` past `staleAfterSec`, because "updated" is the wrong word for
+data that has stopped arriving. The station name row below it is no longer the
+panel's title and no longer falls back to the word "Headway".
+
+**Saving a station from search makes it active.** Recorded in the Panel
+sections below.
+
+**The state file's own watcher had to be guarded.** `FileView` has
+`watchChanges: true` so an external edit is picked up, but `writeState()` trips
+that same watcher, and `FileView.text()` still returns the PREVIOUS content
+when it fires. Measured: saving a fourth station logged
+`writeState stations=4 active=L14` and then, in the same second,
+`loadState -> stations=3 active=640` -- the reload undoing the save. The
+user-visible symptom was that adding a station took two clicks, the first
+being silently reverted. `Service.qml` now consumes one watcher event per
+write. Consumed rather than latched, so a failed write cannot leave the file
+watching permanently deaf.
+
 ## Verified findings
 
 Everything below was checked live on the target machine on 2026-08-25, not
@@ -117,10 +183,10 @@ unverified until they aren't.
    It was used to *validate* the station model but is **not** a build
    dependency; see finding 17 for what replaced it.
 7. **`String.fromCodePoint` works in QML's JS engine** and round-trips an
-   astral codepoint (`length === 2`, `codePointAt(0) === 0xF0BA4`).
+   astral codepoint (`length === 2`, `codePointAt(0) === 0xF1308`).
 8. **A literal astral character does *not* survive the editing path.** The
    same probe embedded U+F0BA4 directly in the source and it came back
-   `codePointAt(0) !== 0xF0BA4`. This is colophon trap #14 reproducing on
+   `codePointAt(0) !== 0xF1308`. This is colophon trap #14 reproducing on
    demand, and it is why the glyph is constructed, never typed.
 9. **No derby or bowler exists in Nerd Fonts.** An exhaustive glyph-name
    search of `FiraCodeNerdFont-Regular.ttf` (what `monospace` resolves to
@@ -594,7 +660,7 @@ Node suites:
   - an `alert_type` string not in the table classifies as info, not as an
     error and not as red;
   - an alert whose `active_period` has not begun is not counted as current.
-- **Guards** — `BAR_GLYPH.codePointAt(0) === 0xF0BA4` (finding 8, and a
+- **Guards** — `BAR_GLYPH.codePointAt(0) === 0xF1308` (finding 8, and a
   codepoint assertion rather than a shape check, per colophon trap #14); the
   manifest-versus-`Service.qml` defaults check.
 

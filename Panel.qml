@@ -34,6 +34,18 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  // Ui/Panel.qml provides bar, settings, opened and barForeground -- and NOT
+  // these three. galley:39-42 and colophon declare the same set. The badge, the
+  // route bullets and the header all read them, and a missing one is a
+  // ReferenceError raised inside a property binding, which qmllint cannot see
+  // and which fails as a silently unstyled element rather than an error.
+  readonly property string barIcon: Model.BAR_GLYPH
+  readonly property color dim: Qt.darker(root.barForeground, 1.45)
+  // Follows the bar's own font so the panel matches its chrome; Style.font
+  // .family (which resolves to "monospace") is the fallback before the bar is
+  // injected, rather than galley's hardcoded family name.
+  readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+
   Service {
     id: service
     settings: root.settings
@@ -54,7 +66,10 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: Model.BAR_GLYPH + (service.barState.badge ? "  " + service.barState.badge : "")
+    // The glyph ALONE. The countdown is no longer appended -- it renders as the
+    // badge child below, so a minute ticking over no longer changes the
+    // button's width and shoves its neighbours along the bar.
+    text: Model.BAR_GLYPH
     tooltipText: service.tooltip
     // `foreground`, not `color` — that is WidgetButton's own colour property.
     // And `barForeground` rather than `foreground`: bar chrome convention, so
@@ -68,6 +83,48 @@ Panel {
       if (service.barState.severity === "error") return Model.COLOR_ERROR
       if (service.barState.severity === "warn") return Model.COLOR_WARN
       return root.barForeground
+    }
+
+    // No MouseArea here on purpose: a bare Rectangle/Text consumes no mouse
+    // events, so click-to-open, middle-click-refresh and the tooltip all keep
+    // working straight through the badge.
+    BorderSurface {
+      visible: badgeLabel.text !== ""
+      width: Math.max(9, button.fontSize * 0.85)
+      height: width
+      radius: width / 2
+      color: Color.accent
+      // The 1px ring separates the badge from the glyph underneath. Color
+      // .background, NOT Color.bar.background: the latter resolves through the
+      // theme's bar.background-alpha, so on a translucent bar the ring itself
+      // would go translucent and reintroduce the smear it exists to prevent.
+      borderSpec: Border.flat(Color.background, 1)
+
+      // glyphPaintedWidth, not labelWidth: BarIconButton sets labelVisible to
+      // false and paints through OpticalGlyph, so labelWidth is 0 here and the
+      // badge would collapse onto the glyph's centre. glyphPaintedWidth is the
+      // ink width, which is what this wants anyway -- half of it right of
+      // centre is the painted glyph's right edge, and half a font-size above
+      // centre is its top. The badge straddles that corner.
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.horizontalCenterOffset: button.glyphPaintedWidth / 2
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.verticalCenterOffset: -button.fontSize * 0.5
+
+      Text {
+        id: badgeLabel
+        anchors.centerIn: parent
+        // barState.badge comes from Model.badgeText, never formatCountdown:
+        // this circle holds two characters and "now" is three. badgeText
+        // returns a bullet for an arriving train; the panel rows below still
+        // spell the word out, where there is room for it.
+        text: service.barState.badge
+        color: Color.background
+        font.family: root.fontFamily
+        font.bold: true
+        font.pixelSize: Math.max(6, parent.height * 0.66)
+        renderType: Text.NativeRendering
+      }
     }
 
     onPressed: function (which) {
@@ -135,12 +192,47 @@ Panel {
       spacing: Style.space(6)
 
 
-      // ---- header ----
+      // ---- plugin header ----
+      // Icon + name on the left, one dim line of status on the right, then a
+      // separator. The shape galley and colophon both use, and the first-party
+      // panels with it.
       RowLayout {
         Layout.fillWidth: true
+        spacing: Style.space(8)
         Text {
-          text: service.station ? service.station.name : "Headway"
+          text: root.barIcon + "  Headway"
           color: root.barForeground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+          Layout.fillWidth: true
+        }
+        Text {
+          // Data age, which the spec puts in the header. The wording comes from
+          // Model.feedAgeText so the stale boundary is tested rather than
+          // reimplemented in a binding.
+          text: Model.feedAgeText(service.feedTimestamp, service.nowSec,
+                                  service.staleAfterSec)
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      PanelSeparator { Layout.fillWidth: true; foreground: root.barForeground }
+
+      // ---- active station ----
+      RowLayout {
+        Layout.fillWidth: true
+        // Was the panel's only title, and said "Headway" with nothing saved.
+        // The plugin header carries the name now, so this row is the station
+        // alone and disappears when there is not one -- the empty-state line
+        // below already says so.
+        visible: !!service.station
+        Text {
+          text: service.station ? service.station.name : ""
+          color: root.barForeground
+          font.family: root.fontFamily
           font.pixelSize: Style.font.title
         }
         Item { Layout.fillWidth: true }
@@ -171,11 +263,13 @@ Panel {
           Layout.fillWidth: true
           spacing: Style.space(6)
 
-          Text {
-            text: arrivalRow.modelData.routeId +
-                  (arrivalRow.modelData.express ? "X" : "")
-            color: root.barForeground
-            font.pixelSize: Style.font.body
+          RouteBullet {
+            // arrivalsFor already split the id -- routeId is normalized and
+            // `express` carries the marker separately -- so both are handed
+            // over and the bullet draws a diamond instead of appending an X.
+            routeId: arrivalRow.modelData.routeId
+            express: arrivalRow.modelData.express
+            fontFamily: root.fontFamily
           }
           Text {
             // The destination is the trip's own terminal, resolved through the
@@ -243,10 +337,20 @@ Panel {
           Layout.fillWidth: true
           spacing: Style.space(4)
           Button {
+            // The routes moved out of this label into the bullets beside it.
+            // The NAME stays the click target that activates the station.
             text: (Stations.byId(StationData.STATIONS, savedRow.modelData.stopId)
                    || { name: savedRow.modelData.stopId }).name
-                  + "  " + savedRow.modelData.routes.join(" ")
             onClicked: service.setActive(savedRow.modelData.stopId)
+          }
+          Repeater {
+            model: savedRow.modelData.routes
+            delegate: RouteBullet {
+              required property var modelData
+              routeId: modelData
+              fontFamily: root.fontFamily
+              diameter: Style.font.caption * 1.5
+            }
           }
           Item { Layout.fillWidth: true }
           Button { text: "✕"; onClicked: service.removeStation(savedRow.modelData.stopId) }
@@ -274,15 +378,36 @@ Panel {
           required property var modelData
           Layout.fillWidth: true
           spacing: Style.space(4)
+          // Split into name / bullets / place, where it used to be one string.
+          // Routes, borough and line are NOT decoration: 76 station names are
+          // ambiguous and six of them read exactly "86 St". A row showing only
+          // a name is not a choice anyone can make correctly -- and the route
+          // set is the part doing that work, which is why it gets the colour.
           Text {
-            // Routes, borough and line are NOT decoration: 76 station names are
-            // ambiguous and six of them read exactly "86 St". A row showing
-            // only a name is not a choice anyone can make correctly.
-            text: hit.modelData.name + "  " + hit.modelData.routes.join(" ")
-                  + "  " + Stations.boroughName(hit.modelData.borough)
+            text: hit.modelData.name
+            color: root.barForeground
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            // maximumWidth, not fillWidth: the bullets and the borough must
+            // keep their room, so a long name elides rather than pushing them
+            // off the row.
+            Layout.maximumWidth: contentColumn.width * 0.45
+          }
+          Repeater {
+            model: hit.modelData.routes
+            delegate: RouteBullet {
+              required property var modelData
+              routeId: modelData
+              fontFamily: root.fontFamily
+              diameter: Style.font.caption * 1.4
+            }
+          }
+          Text {
+            text: Stations.boroughName(hit.modelData.borough)
                   + (hit.modelData.distanceKm !== null
                      ? "  " + hit.modelData.distanceKm.toFixed(1) + " km" : "")
             color: root.barForeground
+            opacity: 0.6
             font.pixelSize: Style.font.caption
             Layout.fillWidth: true
             elide: Text.ElideRight

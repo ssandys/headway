@@ -238,12 +238,73 @@ const snap = (over) => Object.assign({
   arrivals: [], alerts: [],
 }, over)
 
-test("BAR_GLYPH is the fedora, built not typed", () => {
+test("BAR_GLYPH is the conductor, built not typed", () => {
   // Trap: a literal astral character does NOT survive the editing path. This
   // asserts the codepoint, not the shape -- a shape check passes just as
   // happily on a typo'd codepoint.
-  assert.equal(Model.BAR_GLYPH.codePointAt(0), 0xF0BA4)
+  // md-account_tie_voice, verified present in VictorMono Nerd Font's cmap.
+  assert.equal(Model.BAR_GLYPH.codePointAt(0), 0xF1308)
   assert.equal(Model.BAR_GLYPH.length, 2, "astral chars are two UTF-16 units")
+})
+
+test("badgeText shortens an arriving train, formatCountdown does not", () => {
+  // The bar badge is a circle sized for two characters, so "now" cannot go in
+  // it. The PANEL still says "now" -- these two must not be the same function,
+  // and a refactor that collapses them is the failure this guards.
+  assert.equal(Model.badgeText(0), "\u2022")
+  assert.equal(Model.badgeText(59), "\u2022")
+  assert.equal(Model.badgeText(60), "1")
+  assert.equal(Model.badgeText(1080), "18")
+  assert.equal(Model.formatCountdown(0), "now", "the panel is unchanged")
+  assert.equal(Model.formatCountdown(59), "now")
+})
+
+test("routeColor covers the route ids the FEEDS actually emit", () => {
+  // Not the display letters. The live feeds emit GS, FS and H for the three
+  // shuttles and SI for Staten Island -- keying on "S" alone leaves all three
+  // shuttles uncoloured, which is the bug this exists to prevent.
+  assert.equal(Model.routeColor("1"), "#EE352E")
+  assert.equal(Model.routeColor("6"), "#00933C")
+  assert.equal(Model.routeColor("7"), "#B933AD")
+  assert.equal(Model.routeColor("A"), "#0039A6")
+  assert.equal(Model.routeColor("M"), "#FF6319")
+  assert.equal(Model.routeColor("G"), "#6CBE45")
+  assert.equal(Model.routeColor("J"), "#996633")
+  assert.equal(Model.routeColor("L"), "#A7A9AC")
+  assert.equal(Model.routeColor("Q"), "#FCCC0A")
+  for (const shuttle of ["S", "GS", "FS", "H"]) {
+    assert.equal(Model.routeColor(shuttle), "#808183", `${shuttle} is a shuttle`)
+  }
+  assert.equal(Model.routeColor("SI"), "#0039A6")
+})
+
+test("routeColor resolves an express id to its trunk colour", () => {
+  // 6X is the 6. Without normalizing, every express train renders as the
+  // unknown-route fallback.
+  assert.equal(Model.routeColor("6X"), Model.routeColor("6"))
+  assert.equal(Model.routeColor("7X"), Model.routeColor("7"))
+})
+
+test("routeColor falls back rather than returning nothing", () => {
+  // A bullet with an empty colour paints an invisible disc with text on top,
+  // which reads as a rendering bug rather than an unknown route.
+  for (const bad of ["", null, undefined, "ZZ", "constructor", "__proto__"]) {
+    assert.equal(Model.routeColor(bad), "#6E7681",
+      `${JSON.stringify(bad)} gets the fallback`)
+  }
+})
+
+test("routeTextColor picks the higher-contrast text for the disc", () => {
+  // Derived from luminance, not a per-route table: the yellow, grey and light
+  // green bullets are all too light for white text at caption size. This
+  // deliberately departs from the MTA, which uses white on G and on L.
+  assert.equal(Model.routeTextColor("Q"), "#000000", "yellow needs black")
+  assert.equal(Model.routeTextColor("L"), "#000000", "light grey needs black")
+  assert.equal(Model.routeTextColor("G"), "#000000", "light green needs black")
+  assert.equal(Model.routeTextColor("A"), "#FFFFFF", "dark blue needs white")
+  assert.equal(Model.routeTextColor("1"), "#FFFFFF", "red needs white")
+  assert.equal(Model.routeTextColor("J"), "#FFFFFF", "brown needs white")
+  assert.equal(Model.routeTextColor("ZZ"), "#FFFFFF", "the fallback is dark")
 })
 
 test("formatCountdown rounds down to whole minutes", () => {
@@ -345,4 +406,23 @@ test("tooltipText names the fault instead of counting when one exists", () => {
 
 test("tooltipText says so when no station is saved", () => {
   assert.match(Model.tooltipText(snap({ station: null, saved: null }), NOW), /no station/i)
+})
+
+test("feedAgeText says how old the data is, and when it is stale", () => {
+  // The panel header's right-hand slot. The spec already puts data age in the
+  // header; this is the string that goes there.
+  assert.equal(Model.feedAgeText(0, 1000, 300), "", "nothing fetched yet")
+  assert.equal(Model.feedAgeText(1000, 1000, 300), "updated 0s ago")
+  assert.equal(Model.feedAgeText(1000, 1045, 300), "updated 45s ago")
+  assert.equal(Model.feedAgeText(1000, 1120, 300), "updated 2m ago")
+  assert.equal(Model.feedAgeText(1000, 8200, 99999), "updated 2h ago")
+  // Past staleAfterSec the wording changes, because "updated" is exactly the
+  // wrong word for data that has stopped arriving.
+  assert.equal(Model.feedAgeText(1000, 1400, 300), "stale - 6m old")
+})
+
+test("feedAgeText survives a clock that runs backwards", () => {
+  // nowSec comes from the local clock and feedTimestamp from the MTA's. NTP
+  // stepping the local clock backwards would otherwise render "updated -4s ago".
+  assert.equal(Model.feedAgeText(1000, 996, 300), "updated 0s ago")
 })
