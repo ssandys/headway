@@ -274,6 +274,24 @@ function feedAgeText(feedTimestamp, nowSec, staleAfterSec) {
   return "updated " + phrase + " ago"
 }
 
+// Distance is measured in km -- haversineKm is the natural unit for the formula
+// and what Stations.search sorts on -- and converted only for display. That
+// keeps unit choice a property of this one function.
+//
+// TODO: make this a plugin setting. The unit is hardcoded imperial today
+// because the target machine is in New York; the manifest schema is where a
+// `distanceUnit` option would go, and every caller already routes through
+// here, so nothing else would need to change.
+var MILES_PER_KM = 0.621371
+
+function distanceText(km) {
+  // An explicit null/undefined check, NOT a falsy one: 0 km is a real answer --
+  // the station you are standing on -- and a falsy test would hide the
+  // distance on the nearest station of all.
+  if (km === null || km === undefined) return ""
+  return (km * MILES_PER_KM).toFixed(1) + " mi"
+}
+
 function badgeText(etaSec) {
   // Escaped, not pasted -- U+2022 is BMP so it would survive, but this file
   // already learned that lesson the hard way with BAR_GLYPH.
@@ -354,6 +372,7 @@ if (typeof module !== "undefined") {
     formatCountdown: formatCountdown,
     badgeText: badgeText,
     feedAgeText: feedAgeText,
+    distanceText: distanceText,
     directionLabelOf: directionLabelOf,
     barState: barState,
     tooltipText: tooltipText

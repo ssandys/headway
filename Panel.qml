@@ -329,6 +329,14 @@ Panel {
       }
 
       // ---- saved stations ----
+      // Wrapped in its own ColumnLayout so this list can be tighter than the
+      // panel's section spacing. Direct children of contentColumn are separated
+      // by Style.space(6), which is right BETWEEN sections and too loose within
+      // a list.
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: Style.space(2)
+
       Repeater {
         model: service.stations
         delegate: RowLayout {
@@ -342,6 +350,13 @@ Panel {
             text: (Stations.byId(StationData.STATIONS, savedRow.modelData.stopId)
                    || { name: savedRow.modelData.stopId }).name
             onClicked: service.setActive(savedRow.modelData.stopId)
+            // Compact, not Ui/Button.qml's defaults. Those are body size with
+            // controlPaddingY (6, so 12px vertical), which made these rows 41px
+            // tall and the list read as a column of buttons rather than a list
+            // of stations. Same values colophon uses for its action row.
+            fontSize: Style.font.caption
+            horizontalPadding: Style.space(6)
+            verticalPadding: Style.space(2)
           }
           Repeater {
             model: savedRow.modelData.routes
@@ -353,8 +368,15 @@ Panel {
             }
           }
           Item { Layout.fillWidth: true }
-          Button { text: "✕"; onClicked: service.removeStation(savedRow.modelData.stopId) }
+          Button {
+            text: "✕"
+            onClicked: service.removeStation(savedRow.modelData.stopId)
+            fontSize: Style.font.caption
+            horizontalPadding: Style.space(6)
+            verticalPadding: Style.space(2)
+          }
         }
+      }
       }
 
       // ---- search ----
@@ -370,6 +392,10 @@ Panel {
         // catcher would keep stealing `r` and Esc. Release it explicitly.
         onVisibleChanged: if (!visible) searchField.focus = false
       }
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: Style.space(2)
 
       Repeater {
         model: Stations.search(StationData.STATIONS, root.query, service.origin, 6)
@@ -403,9 +429,10 @@ Panel {
             }
           }
           Text {
+            // Model.distanceText, not an inline toFixed: it converts km to
+            // miles and is the single place a unit setting would land.
             text: Stations.boroughName(hit.modelData.borough)
-                  + (hit.modelData.distanceKm !== null
-                     ? "  " + hit.modelData.distanceKm.toFixed(1) + " km" : "")
+                  + "  " + Model.distanceText(hit.modelData.distanceKm)
             color: root.barForeground
             opacity: 0.6
             font.pixelSize: Style.font.caption
@@ -418,6 +445,11 @@ Panel {
               id: dirButton
               required property var modelData
               text: dirButton.modelData.label
+              // Compact, for the same reason as the saved list: these were the
+              // 41px-tall buttons setting every search row's height.
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(6)
+              verticalPadding: Style.space(2)
               onClicked: service.saveStation({
                 stopId: hit.modelData.id, name: hit.modelData.name,
                 routes: hit.modelData.routes, direction: dirButton.modelData.dir
@@ -426,9 +458,11 @@ Panel {
           }
         }
       }
+      }
 
       Text {
         text: "r refresh   esc close"
+        Layout.alignment: Qt.AlignHCenter
         color: root.barForeground
         opacity: 0.6
         font.pixelSize: Style.font.caption

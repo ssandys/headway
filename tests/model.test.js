@@ -426,3 +426,21 @@ test("feedAgeText survives a clock that runs backwards", () => {
   // stepping the local clock backwards would otherwise render "updated -4s ago".
   assert.equal(Model.feedAgeText(1000, 996, 300), "updated 0s ago")
 })
+
+test("distanceText renders miles, not kilometres", () => {
+  // haversineKm stays in km -- that is the natural unit for the formula and
+  // what `search` sorts on. Only the DISPLAY is imperial, so switching units
+  // later is a change to this function and nothing else.
+  assert.equal(Model.distanceText(null), "", "no origin, no distance")
+  assert.equal(Model.distanceText(0.16), "0.1 mi")
+  assert.equal(Model.distanceText(1), "0.6 mi")
+  assert.equal(Model.distanceText(10), "6.2 mi")
+  assert.equal(Model.distanceText(0), "0.0 mi")
+})
+
+test("distanceText does not confuse 0 with absent", () => {
+  // 0 km is a real answer -- the station you are standing on -- and `null` is
+  // "there is no location fix". A falsy check would collapse the two and hide
+  // the distance on the nearest station of all.
+  assert.notEqual(Model.distanceText(0), Model.distanceText(null))
+})

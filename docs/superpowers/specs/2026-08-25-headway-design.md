@@ -137,6 +137,28 @@ panel's title and no longer falls back to the word "Headway".
 **Saving a station from search makes it active.** Recorded in the Panel
 sections below.
 
+**Distances display in miles.** `haversineKm` still returns kilometres --
+that is the natural unit for the formula and what `Stations.search` sorts on --
+and `Model.distanceText` converts for display only. `distanceText` guards
+against `null` explicitly rather than falsily, because 0 km is a real answer
+(the station you are standing on) and a falsy test would hide the distance on
+the nearest station of all.
+
+*Deferred, deliberately:* the unit is hardcoded because the target machine is
+in New York. Making it a `distanceUnit` plugin setting is a change to
+`distanceText` and the manifest schema alone -- every caller already routes
+through that one function -- so it stays out of the MVP rather than being
+designed around.
+
+**The panel's row spacing is per-list, not global.** Direct children of
+`contentColumn` are separated by `Style.space(6)`, which is right between
+sections and too loose inside a list, so the saved list and the search results
+each sit in their own `ColumnLayout` at `Style.space(2)`. The buttons in both
+also drop to caption size with `Style.space(2)` vertical padding: `Ui/Button
+.qml`'s defaults are body size with `controlPaddingY` of 6, which measured 41px
+tall per row and made each list read as a column of buttons rather than a list
+of stations.
+
 **The state file's own watcher had to be guarded.** `FileView` has
 `watchChanges: true` so an external edit is picked up, but `writeState()` trips
 that same watcher, and `FileView.text()` still returns the PREVIOUS content
