@@ -79,13 +79,25 @@ function arrivalsFor(saved, trips, nowSec) {
       out.push({
         routeId: normalizeRoute(t.routeId),
         express: isExpress(t.routeId),
+        tripId: t.tripId,
         destinationStopId: terminal ? terminal.stopId : "",
         etaSec: eta
       })
       break
     }
   }
-  out.sort(function (a, b) { return a.etaSec - b.etaSec })
+  out.sort(function (a, b) {
+    if (a.etaSec !== b.etaSec) return a.etaSec - b.etaSec
+    // Qt's V4 sort is NOT stable. Measured: 40 items across 8 tied groups
+    // come back reordered, where node's has been stable since ES2019 — so no
+    // test running only under node can catch this. Without an explicit
+    // tie-breaker, two trains sharing an etaSec swap places between polls and
+    // the panel visibly reshuffles. tripId is unique per train and is the
+    // natural stable key.
+    if (a.tripId < b.tripId) return -1
+    if (a.tripId > b.tripId) return 1
+    return 0
+  })
   return out
 }
 

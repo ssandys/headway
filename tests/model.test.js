@@ -95,6 +95,24 @@ test("arrivalsFor keeps a train arriving right now", () => {
   assert.equal(Model.arrivalsFor(saved, trips, NOW).length, 1)
 })
 
+test("arrivalsFor orders tied arrivals deterministically", () => {
+  // Qt's V4 engine does NOT have a stable sort -- measured: 40 items across
+  // 8 tied groups come back reordered, while node's has been stable since
+  // ES2019. So a suite running only under node cannot catch an unstable
+  // ordering; this test catches it by feeding the same trips in both orders
+  // and requiring the same output.
+  const saved = { stopId: "L08", routes: ["L"], direction: "N" }
+  const trips = [
+    trip("zulu", "L", [stop("L08N", 300)]),
+    trip("alpha", "L", [stop("L08N", 300)]),
+  ]
+  const forward = Model.arrivalsFor(saved, trips, NOW).map((a) => a.tripId)
+  const reversed = Model.arrivalsFor(saved, trips.slice().reverse(), NOW).map((a) => a.tripId)
+  assert.deepEqual(forward, reversed,
+    "tied arrivals must order identically regardless of input order")
+  assert.deepEqual(forward, ["alpha", "zulu"], "ties break on tripId")
+})
+
 const Gtfs = require("../Gtfs.js")
 
 test("normalizeRoute agrees between Model.js and Gtfs.js", () => {
