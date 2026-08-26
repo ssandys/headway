@@ -122,3 +122,98 @@ test("normalizeRoute agrees between Model.js and Gtfs.js", () => {
     assert.equal(Model.normalizeRoute(id), Gtfs.normalizeRoute(id), `for "${id}"`)
   }
 })
+
+test("classifyAlert reddens a total loss of service", () => {
+  assert.equal(Model.classifyAlert("No Scheduled Service"), "red")
+})
+
+test("classifyAlert ambers a degradation", () => {
+  assert.equal(Model.classifyAlert("Delays"), "amber")
+  assert.equal(Model.classifyAlert("Reduced Service"), "amber")
+})
+
+test("classifyAlert treats every Planned- type as planned", () => {
+  for (const t of ["Planned - Stops Skipped", "Planned - Part Suspended",
+                   "Planned - Express to Local", "Planned - Reroute",
+                   "Planned - Suspended", "Planned - Extra Transfer"]) {
+    assert.equal(Model.classifyAlert(t), "planned", t)
+  }
+})
+
+test("a Planned- suspension does NOT redden the bar", () => {
+  // The whole point: 144 of 199 alerts are planned work. If these coloured the
+  // glyph it would be amber or red essentially permanently.
+  assert.notEqual(Model.classifyAlert("Planned - Suspended"), "red")
+})
+
+test("classifyAlert treats informational types as info", () => {
+  for (const t of ["Boarding Change", "Extra Service", "Special Schedule",
+                   "Sunday Schedule", "Station Notice"]) {
+    assert.equal(Model.classifyAlert(t), "info", t)
+  }
+})
+
+test("an unrecognised alert type is info, never red", () => {
+  // New types appear without warning. The failure mode of a surprise value
+  // must be a quiet panel row, never a red bar.
+  assert.equal(Model.classifyAlert("Meteor Strike"), "info")
+  assert.equal(Model.classifyAlert(""), "info")
+})
+
+test("an Object.prototype member as an alert type is info, never red", () => {
+  // The severity tables are plain objects, so a bare `TABLE[alertType]`
+  // lookup walks the prototype chain and returns a truthy inherited member
+  // for these — classifying them as red. alertType is upstream feed data,
+  // not a curated constant, so the tables must be probed with
+  // hasOwnProperty. This test fails against a bare-lookup implementation.
+  for (const key of ["constructor", "toString", "__proto__", "valueOf",
+                     "hasOwnProperty", "isPrototypeOf"]) {
+    assert.equal(Model.classifyAlert(key), "info", `"${key}" must not be red`)
+  }
+})
+
+test("alertIsActive is false before the period opens", () => {
+  const a = { periods: [{ start: NOW + 3600, end: NOW + 7200 }] }
+  assert.equal(Model.alertIsActive(a, NOW), false)
+})
+
+test("alertIsActive is true inside the period", () => {
+  const a = { periods: [{ start: NOW - 60, end: NOW + 60 }] }
+  assert.equal(Model.alertIsActive(a, NOW), true)
+})
+
+test("alertIsActive is false after the period closes", () => {
+  const a = { periods: [{ start: NOW - 7200, end: NOW - 3600 }] }
+  assert.equal(Model.alertIsActive(a, NOW), false)
+})
+
+test("alertIsActive treats an open-ended period as ongoing", () => {
+  const a = { periods: [{ start: NOW - 60, end: 0 }] }
+  assert.equal(Model.alertIsActive(a, NOW), true)
+})
+
+test("alertIsActive treats no period at all as ongoing", () => {
+  assert.equal(Model.alertIsActive({ periods: [] }, NOW), true)
+})
+
+test("alertsFor keeps only alerts touching the saved routes", () => {
+  const alerts = [
+    { id: "a", routes: ["L"], alertType: "Delays", periods: [] },
+    { id: "b", routes: ["G"], alertType: "Delays", periods: [] },
+  ]
+  const out = Model.alertsFor(["L"], alerts, NOW)
+  assert.deepEqual(out.map((a) => a.id), ["a"])
+})
+
+test("alertsFor matches an express route against the saved plain route", () => {
+  const alerts = [{ id: "x", routes: ["6X"], alertType: "Delays", periods: [] }]
+  assert.equal(Model.alertsFor(["6"], alerts, NOW).length, 1)
+})
+
+test("alertsFor drops alerts whose period has not begun", () => {
+  const alerts = [
+    { id: "future", routes: ["L"], alertType: "Planned - Suspended",
+      periods: [{ start: NOW + 86400, end: NOW + 90000 }] },
+  ]
+  assert.deepEqual(Model.alertsFor(["L"], alerts, NOW), [])
+})

@@ -101,11 +101,72 @@ function arrivalsFor(saved, trips, nowSec) {
   return out
 }
 
+// Severity is derived from the Mercury extension's alert_type, because GTFS
+// `effect` and `cause` are populated on zero alerts in practice.
+//
+// The "Planned - " prefix is the single most important thing here: it is 144
+// of 199 alerts, all scheduled engineering work, much of it for weekends still
+// days away. Colouring the bar for those would pin the glyph amber forever.
+var ALERT_RED = { "No Scheduled Service": true }
+var ALERT_AMBER = { "Delays": true, "Reduced Service": true }
+var PLANNED_PREFIX = "Planned - "
+
+function classifyAlert(alertType) {
+  if (!alertType) return "info"
+  if (alertType.substring(0, PLANNED_PREFIX.length) === PLANNED_PREFIX) return "planned"
+  // hasOwnProperty, NOT a bare lookup. `ALERT_RED[alertType]` walks the
+  // prototype chain, so an alertType of "constructor", "toString" or
+  // "__proto__" returns a truthy inherited member and classifies as RED —
+  // breaking the one safety property this function has, that an unrecognised
+  // type is never red. alertType is upstream feed data, not a curated
+  // constant. Gtfs.js and Stations.js already guard their lookup tables the
+  // same way.
+  if (ALERT_RED.hasOwnProperty(alertType)) return "red"
+  if (ALERT_AMBER.hasOwnProperty(alertType)) return "amber"
+  // Unrecognised types default to info deliberately. New ones appear without
+  // warning, and a surprise value must degrade to a quiet panel row.
+  return "info"
+}
+
+// An alert with no period, or an open-ended one, is ongoing. A planned alert
+// is published well before it applies, so this filter is what stops next
+// weekend's work from reading as today's disruption.
+function alertIsActive(alert, nowSec) {
+  var periods = alert.periods || []
+  if (periods.length === 0) return true
+  for (var i = 0; i < periods.length; i++) {
+    var p = periods[i]
+    if (p.start && nowSec < p.start) continue
+    if (p.end && nowSec > p.end) continue
+    return true
+  }
+  return false
+}
+
+function alertsFor(routes, alerts, nowSec) {
+  var out = []
+  for (var i = 0; i < alerts.length; i++) {
+    var a = alerts[i]
+    if (!alertIsActive(a, nowSec)) continue
+    var hit = false
+    for (var j = 0; j < (a.routes || []).length; j++) {
+      for (var k = 0; k < routes.length; k++) {
+        if (normalizeRoute(a.routes[j]) === normalizeRoute(routes[k])) hit = true
+      }
+    }
+    if (hit) out.push(a)
+  }
+  return out
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     normalizeRoute: normalizeRoute,
     isExpress: isExpress,
     dedupeTrips: dedupeTrips,
-    arrivalsFor: arrivalsFor
+    arrivalsFor: arrivalsFor,
+    classifyAlert: classifyAlert,
+    alertIsActive: alertIsActive,
+    alertsFor: alertsFor
   }
 }
