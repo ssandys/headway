@@ -14,20 +14,24 @@ Numbering is kept from those reports so the detail is findable.
 
 ## Behaviour
 
-**N9 — `selfWrites` strands cumulatively.** `Service.qml`
-`FileView.watchChanges` fires on our own `writeState()`, and `FileView.text()`
-still returns the previous content when it does, so a counter absorbs one
-watcher event per write. If a write fails, or coalesces, the counter never
-drains — where the original boolean stranded once, this strands once per
-un-consumed write, and each stranded count swallows one genuine external edit.
-`onLoaded` is outside the guard entirely.
+**N9 — RESOLVED at v0.1.1.** The `selfWrites` counter existed only to swallow
+the watcher events our own writes caused. The state file is no longer watched,
+and no longer written through `FileView` at all, so the counter and its
+cumulative-stranding bug are both gone.
 
-*Suggested fix:* replace the counter with a content comparison — remember the
-exact string written and skip a reload whose text equals it. Not verifiable
-outside the live shell, which is why it was not attempted blind.
+**N10 — an in-flight feed request can throw after the component is destroyed.**
+`Service.qml`'s XHR callbacks read `root.generation` to discard superseded
+responses. When the component is torn down mid-poll — a plugin hot-reload, or
+the widget being disabled — `root` is null and that read throws
+`TypeError: Cannot read property 'generation' of null` into the journal.
 
-*Impact:* nothing edits `headway.json` externally today, so the stranding costs
-nothing in practice.
+*Impact:* cosmetic. The widget is going away at that moment, so nothing
+user-visible follows; it is one logged warning per teardown-with-poll-in-flight.
+Pre-existing rather than introduced by the v0.1.1 hardening — observed on
+2026-08-26, and again on 2026-08-27 from the released `ssandys.headway` build.
+
+*Suggested fix:* guard the callbacks with an explicit `if (!root) return`, or
+abort in-flight requests from `Component.onDestruction`.
 
 **S2 — `nextDirection`'s stale-direction repair path is unreachable.**
 `Model.js` justifies its `return dirs[0]` fallback as letting a state file with

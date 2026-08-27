@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ssandys.headway",
   "name": "Headway",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Sean Sandys",
   "license": "MIT",
   "description": "Next-train countdowns for saved NYC subway stations, with service alerts for the routes you ride. Summon with: omarchy-shell shell toggle ssandys.headway",

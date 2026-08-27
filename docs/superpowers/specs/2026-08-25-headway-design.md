@@ -170,6 +170,38 @@ of three is a quieter kind of wrong than naming none. The separator stays `-`
 rather than the spec's `·`: the pure modules avoid non-ASCII literals for the
 reason `BAR_GLYPH` exists.
 
+**The state file is read and written through `Process`, not `FileView`.**
+Added at v0.1.1 in response to the Omarchy marketplace review, which passed
+structural validation and the automated security baseline at `12d6630` but
+returned `needs-fixes` with `UNBOUNDED-STATE-FILE-IN-SHELL`: an always-loaded
+service consuming a predictable state file through an unbounded `FileView`, then
+iterating the whole array, can exhaust or stall the SHARED shell process.
+
+The finding is fair. Two review rounds validated each entry's SHAPE and never
+bounded the QUANTITY.
+
+`FileView` cannot fix it. MEASURED: it attempts a read whenever `path` is
+assigned, and neither `preload: false` nor `blockAllReads: true` prevents it --
+a probe logged `Read of ... failed: File does not exist` under both. Its API
+carries no size cap, no stat and no symlink control, and Quickshell exports no
+filesystem primitive. Since its sibling property is `blockLoading`,
+`blockAllReads` most likely means "make reads blocking", which in a shared shell
+is worse rather than better. So there is no write-only `FileView`, and no
+bounded one.
+
+Reads now go through `head -c` with a 64 KiB cap, after `[ -L ]` and `[ -f ]`
+reject symlinks and non-regular files -- so a bounded number of bytes from a
+real file is all that can reach QML. Consumption is capped again on arrival: at
+most 50 stations, every field type- and length-checked. Writes go through
+`printf` to a sibling temp file then `mv -f`, the same atomic rename
+`atomicWrites` provided. The payload is passed as a positional parameter and
+never interpolated into the script -- verified with a payload containing
+`$(whoami)`, backticks and `;rm -rf /`, all of which landed as literal text.
+
+`watchChanges` is gone with it. Headway is the file's only legitimate writer, so
+re-reading on every external change was surface rather than a feature -- and
+dropping it retires the `selfWrites` counter and its stranding bug.
+
 **A saved row's direction is shown and switchable.** Added on request after the
 route filter landed. A saved row previously did not say which way it pointed at
 all -- the direction appeared only in the header, and only for the active

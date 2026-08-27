@@ -30,9 +30,16 @@ available direction buttons such as Uptown and Downtown.](preview.png)
 | Program | Used for | Arch package |
 |---|---|---|
 | `notify-send` | Desktop notifications | `libnotify` |
+| `sh`, `head`, `printf`, `mkdir`, `mv`, `dirname` | Reading and writing the saved-stations file | `coreutils` (in `base`) |
 
 Plus the Omarchy shell itself. **That is the whole list** — no interpreter, no
 API key, no pip or npm packages, and no static GTFS download at runtime.
+
+The coreutils row is not a real prerequisite in practice — those are in `base`,
+so every Arch system has them — but it is listed because the plugin does shell
+out for its state file. That is deliberate: `FileView` cannot bound a read, so
+the file is read through `head -c` with a byte cap and a symlink check, and
+written through an atomic `printf`-then-`mv`. See "State file" below.
 
 That is deliberately not the same claim as "there are no prerequisites."
 `Service.qml` spawns `notify-send`, and `libnotify` is in neither `base` nor
@@ -146,10 +153,27 @@ Configure per-widget through Omarchy's plugin settings.
 | `notifyRouteAlert` | `true` | Notify on a new alert for a saved route |
 | `notifyFeedStale` | `true` | Notify when the feed goes stale or unreachable |
 
+### State file
+
 Saved stations are **not** plugin settings. Omarchy's plugin settings are
 read-only at runtime — the shell exposes no write-back API — so the saved list
 lives in `~/.local/state/omarchy/settings/headway.json`, beside the shell's own
 `weather.json` and `flight-radar.json`.
+
+It is read defensively, because a bar widget lives in the **shared** shell
+process and a stall there takes every other widget with it:
+
+- **Capped at 64 KiB** by `head -c` before a byte of it reaches QML. Four saved
+  stations is about 1 KB.
+- **Symlinks and non-regular files are rejected**, so the path cannot be aimed
+  at `/dev/zero` or at someone else's file.
+- **At most 50 stations** are consumed, and every field is length-checked and
+  type-checked. A malformed entry is dropped, not trusted.
+- **Nothing watches the file.** Headway is its only legitimate writer, so it is
+  read once at startup rather than re-read on every external change.
+
+Writes go to a sibling temp file and are renamed into place, so an interrupted
+write cannot leave a half-written file.
 
 ## Troubleshooting
 

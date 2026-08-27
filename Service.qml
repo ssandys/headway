@@ -49,7 +49,16 @@ Item {
     }
   }
 
-  Component.onCompleted: root.nowSec = Math.floor(Date.now() / 1000)
+  // ONE handler. QML rejects a duplicate Component.onCompleted and the whole
+  // component then fails to instantiate -- silently, as far as the journal is
+  // concerned. Adding a second one for the state reader cost a deploy to find.
+  Component.onCompleted: {
+    root.nowSec = Math.floor(Date.now() / 1000)
+    // Kick the bounded state read. Not a `running: true` default on the
+    // Process: that starts it during component construction, before statePath
+    // and the collector are necessarily bound.
+    stateReader.running = true
+  }
 
   readonly property var saved: {
     for (var i = 0; i < root.stations.length; i++) {
@@ -92,33 +101,94 @@ Item {
   // Plugin settings are READ-ONLY -- the shell exposes no write-back API -- so
   // saved stations need their own file. This sits beside weather.json and
   // flight-radar.json, the convention Omarchy already uses for exactly this.
-  FileView {
-    id: stateFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/headway.json"
-    watchChanges: true
-    printErrors: false
-    atomicWrites: true
-    onLoaded: root.loadState()
-    // Our own writeState fires this watcher, and FileView.text() still returns
-    // the PREVIOUS file content when it does. MEASURED: saving a fourth station
-    // logged `writeState stations=4 active=L14` and then, in the same second,
-    // `loadState -> stations=3 active=640` -- the reload silently undoing the
-    // save. That is why adding a station appeared to need two clicks. The first
-    // was reverted, and the second only worked because by then the first
-    // write had reached the disk.
-    //
-    // A COUNTER, not a bool. Two writeState() calls landing before the first
-    // watcher event set one flag twice; event 1 consumed it and event 2 ran
-    // loadState() -- the exact path documented above as returning stale content
-    // and undoing a save. Clicking saved station A then B in quick succession
-    // was enough. Consumed, not latched, so a failed write still costs at most
-    // one missed external edit rather than deafening the watcher for good.
-    onFileChanged: {
-      if (root.selfWrites > 0) { root.selfWrites = root.selfWrites - 1; return }
-      root.loadState()
+  //
+  // READS AND WRITES GO DIFFERENT WAYS, deliberately, after the Omarchy plugin
+  // marketplace review raised UNBOUNDED-STATE-FILE-IN-SHELL against
+  // 12d6630: this service is always loaded, the file path is predictable, and
+  // a FileView read is unbounded -- so a very large or hostile file could
+  // exhaust or stall the SHARED shell process, taking every other widget with
+  // it. FileView cannot help: its whole API is blockWrites, atomicWrites,
+  // watchChanges, adapter, path, text, data, preload, loaded, blockLoading,
+  // blockAllReads and printErrors. No size cap, no stat, no symlink control.
+  // Quickshell exports no filesystem primitive either. So the read is bounded
+  // outside QML and the write keeps FileView for its atomic rename.
+  readonly property string statePath:
+    Quickshell.env("HOME") + "/.local/state/omarchy/settings/headway.json"
+
+  // 64 KiB. Four saved stations is about 1 KB, so this is ~250x any real use
+  // and far below anything that stalls a shell.
+  readonly property int stateByteLimit: 65536
+  // A saved-stations list, not a database. Bounds the O(n) walk in consumeState
+  // and everything downstream that iterates it.
+  readonly property int stateStationLimit: 50
+  readonly property int stateFieldLimit: 64
+
+  // NO FileView here, for reads OR writes. MEASURED on this machine: FileView
+  // attempts a read whenever `path` is assigned, and neither `preload: false`
+  // nor `blockAllReads: true` prevents it -- a probe logged
+  // "Read of ... failed: File does not exist" under both. (Its sibling property
+  // is `blockLoading`, so `blockAllReads` most likely means "make reads
+  // blocking" rather than "prevent reads" -- worse here, not better.) There is
+  // therefore no write-only FileView, and keeping one for writes would keep
+  // exactly the unbounded read the marketplace review flagged.
+  //
+  // So writes go through the same shell the read does: printf to a sibling temp
+  // file, then mv -f -- the same atomic rename atomicWrites gave us. mkdir -p
+  // covers a first run where ~/.local/state/omarchy/settings does not exist.
+  //
+  // The payload is passed as a POSITIONAL PARAMETER, never interpolated into
+  // the script, so quotes, backticks and semicolons in a station name are
+  // written verbatim. Verified with a payload containing $(whoami), backticks
+  // and ;rm -rf / -- every one landed as literal text.
+  property string pendingWrite: ""
+
+  Process {
+    id: stateWriter
+    running: false
+    onRunningChanged: {
+      // runningChanged, not exited, for the reason the notifier documents:
+      // Quickshell's Process never emits exited() on a failed spawn, so an
+      // exited-only handler would strand a queued write forever.
+      if (stateWriter.running) return
+      if (root.pendingWrite !== "") Qt.callLater(root.flushState)
     }
-    onLoadFailed: { root.stations = []; root.activeStationId = "" }
   }
+
+  // Bounded, symlink-rejecting, one-shot read. `head -c` caps the bytes that
+  // can ever reach QML; `-f` rejects a directory, device or fifo; `-L` rejects
+  // a symlink, so the path cannot be pointed at /dev/zero or someone else's
+  // file. coreutils is in `base`, so this adds no prerequisite.
+  //
+  // Exits 0 with empty output when the file is absent, which is the
+  // first-run path and must not read as an error.
+  Process {
+    id: stateReader
+    running: false
+    command: ["sh", "-c",
+      'p="$1"; [ -L "$p" ] && exit 0; [ -f "$p" ] || exit 0; ' +
+      'exec head -c "$2" -- "$p"',
+      "headway-state", root.statePath, String(root.stateByteLimit)]
+    stdout: StdioCollector {
+      // waitForEnd is REQUIRED, and omitting it is why the first attempt at
+      // this read produced nothing at all: without it the collector does not
+      // hold the stream open to the end, so onStreamFinished never delivers a
+      // complete payload. Every first-party user in the shell sets it --
+      // Commons/Style.qml:446 and plugins/panels/disk-speedtest:105.
+      waitForEnd: true
+      // Bare `text`, not `this.text`, matching those same call sites.
+      onStreamFinished: root.consumeState(text)
+    }
+    onRunningChanged: {
+      // runningChanged, not exited: Quickshell's Process never emits exited()
+      // on a failed SPAWN, so an exited-only handler would leave the widget
+      // waiting forever for state that is never coming. A failed spawn must
+      // still resolve to "no saved stations" and let the panel say so.
+      if (stateReader.running) return
+      if (!root.stateResolved) root.consumeState("")
+    }
+  }
+
+  property bool stateResolved: false
 
   // Entries are VALIDATED, not trusted. headway.json is plain JSON the README
   // invites the user to inspect, so its contents are upstream data. An entry
@@ -128,21 +198,43 @@ Item {
   // and this is the half that keeps junk out of `refresh()` as well.
   function validStation(e) {
     if (!e || typeof e.stopId !== "string" || e.stopId === "") return false
+    if (e.stopId.length > root.stateFieldLimit) return false
     if (e.direction !== "N" && e.direction !== "S") return false
-    if (!e.routes || typeof e.routes.length !== "number") return false
+    // An actual array test. `typeof e.routes.length === "number"` admits a
+    // string and {"length": 2}; neither throws downstream, but neither is a
+    // route list either. Works in both engines, unlike Array.isArray in ES3.
+    if (Object.prototype.toString.call(e.routes) !== "[object Array]") return false
+    if (e.routes.length === 0 || e.routes.length > root.stateFieldLimit) return false
+    for (var i = 0; i < e.routes.length; i++) {
+      if (typeof e.routes[i] !== "string") return false
+      if (e.routes[i].length > root.stateFieldLimit) return false
+    }
+    if (e.name !== undefined && typeof e.name !== "string") return false
     return true
   }
 
-  function loadState() {
+  // Takes TEXT, not a FileView. Everything that reaches here has already been
+  // capped at stateByteLimit bytes by a non-symlink regular file.
+  function consumeState(text) {
+    root.stateResolved = true
     var loaded = []
     var active = ""
     try {
-      var data = JSON.parse(stateFile.text())
-      var raw = data.stations || []
-      for (var i = 0; i < raw.length; i++) {
-        if (root.validStation(raw[i])) loaded.push(raw[i])
+      // Belt as well as braces: head bounds what arrives, and this bounds what
+      // is parsed if the reader is ever replaced by something that does not.
+      if (text && text.length <= root.stateByteLimit) {
+        var data = JSON.parse(text)
+        var raw = data.stations || []
+        var cap = raw.length < root.stateStationLimit
+          ? raw.length : root.stateStationLimit
+        for (var i = 0; i < cap; i++) {
+          if (root.validStation(raw[i])) loaded.push(raw[i])
+        }
+        if (typeof data.activeStationId === "string" &&
+            data.activeStationId.length <= root.stateFieldLimit) {
+          active = data.activeStationId
+        }
       }
-      active = data.activeStationId || ""
     } catch (e) {
       loaded = []
       active = ""
@@ -150,23 +242,40 @@ Item {
     root.stations = loaded
     root.activeStationId = active
     // REQUIRED. The poll Timer has triggeredOnStart, so refresh() runs once at
-    // component completion -- but FileView loads asynchronously AFTER that, so
-    // that first refresh sees no saved station and early-returns. Without this
-    // call nothing re-triggers a fetch and the bar stays blank until the next
-    // idle tick, which is up to pollIntervalIdleSec (90s) after every shell
-    // start. Observed on every redeploy during development.
+    // component completion -- but the state read is asynchronous and finishes
+    // AFTER that, so the first refresh sees no saved station and early-returns.
+    // Without this call nothing re-triggers a fetch and the bar stays blank
+    // until the next idle tick, up to pollIntervalIdleSec (90s) after every
+    // shell start. Observed on every redeploy during development.
     root.refresh()
   }
 
-  // Incremented before every setText, decremented by each watcher event it
-  // causes. See stateFile.onFileChanged for why this is a count and not a flag.
-  property int selfWrites: 0
-
+  // Last-write-wins. The state file is a whole-file snapshot, so a payload
+  // superseded before it reached disk has no value -- and a burst of saves
+  // (toggling three directions quickly) costs one write rather than three.
+  //
+  // No selfWrites counter any more: it existed only to swallow the watcher
+  // events our own writes caused, and nothing watches this file now. That also
+  // retires the cumulative-stranding bug it had (open issue N9).
   function writeState() {
-    root.selfWrites = root.selfWrites + 1
-    stateFile.setText(JSON.stringify({
+    root.pendingWrite = JSON.stringify({
       version: 1, activeStationId: root.activeStationId, stations: root.stations
-    }, null, 2) + "\n")
+    }, null, 2) + "\n"
+    root.flushState()
+  }
+
+  function flushState() {
+    // Assigning Process.command while it is running is a silent no-op, so a
+    // busy writer waits for onRunningChanged rather than clobbering itself.
+    if (stateWriter.running) return
+    var payload = root.pendingWrite
+    if (payload === "") return
+    root.pendingWrite = ""
+    stateWriter.command = ["sh", "-c",
+      'd=$(dirname -- "$1"); mkdir -p -- "$d" && ' +
+      'printf %s "$2" > "$1.tmp" && mv -f -- "$1.tmp" "$1"',
+      "headway-write", root.statePath, payload]
+    stateWriter.running = true
   }
 
   function setActive(id) { root.activeStationId = id; writeState(); refresh() }
