@@ -447,6 +447,31 @@ Item {
         feedProc.settle()
       }
 
+      // runningChanged as well as exited, for the reason the state reader and
+      // the notifier both document: Quickshell's Process never emits exited()
+      // on a failed SPAWN. Resolving on exited() alone strands `pending` and
+      // leaves the panel loading forever with `ok` still true -- measured with
+      // curl removed from PATH, which reported "everything is fine" while
+      // showing nothing, indefinitely.
+      //
+      // Deferred with Qt.callLater rather than decided here, because a normal
+      // exit also drives running false and its exited() may arrive after this
+      // handler. By the time the deferred call runs, a real exit has already
+      // set sawExit and this does nothing.
+      onRunningChanged: {
+        if (feedProc.running) return
+        Qt.callLater(feedProc.settleFailedSpawn)
+      }
+
+      function settleFailedSpawn() {
+        if (feedProc.sawExit) return
+        feedProc.exitCode = 127
+        feedProc.sawExit = true
+        // No stream either -- nothing ever opened one.
+        feedProc.sawStream = true
+        feedProc.settle()
+      }
+
       // Set here rather than bound: `command` must be resolved before start.
       Component.onCompleted: feedProc.running = true
     }

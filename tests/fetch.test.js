@@ -63,3 +63,11 @@ test("errorText never returns empty for a failure it does not recognise", () => 
     assert.match(text, new RegExp(String(code)), "and must name the code")
   })
 })
+
+test("errorText names a missing curl, which is a failed spawn rather than an exit", () => {
+  // Quickshell's Process never emits exited() on a failed SPAWN, so the feed
+  // delegate synthesises 127 -- the shell convention for command-not-found --
+  // to resolve a fetch that never started. curl's own codes stop well below
+  // it, so the sentinel cannot collide with a real curl failure.
+  assert.match(Fetch.errorText(127), /not installed|not found/i)
+})

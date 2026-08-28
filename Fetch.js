@@ -53,6 +53,11 @@ function errorText(exitCode) {
     // recoverable without --write-out, and the distinction has never mattered
     // here: the feed is either served or it is not.
     case 22: return "HTTP error from the feed"
+    // Not a curl code at all. Quickshell's Process never emits exited() on a
+    // failed SPAWN, so the feed delegate synthesises 127 -- the shell
+    // convention for command-not-found -- to resolve a fetch that never
+    // started. curl's own codes stop well below 127, so it cannot collide.
+    case 127: return "curl is not installed"
     // Never silent. An unmapped code still names itself, so the panel says
     // something specific enough to search for.
     default: return "curl exit " + exitCode
