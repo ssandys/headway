@@ -30,7 +30,8 @@ available direction buttons such as Uptown and Downtown.](preview.png)
 | Program | Used for | Arch package |
 |---|---|---|
 | `notify-send` | Desktop notifications | `libnotify` |
-| `sh`, `head`, `printf`, `mkdir`, `mv`, `dirname` | Reading and writing the saved-stations file | `coreutils` (in `base`) |
+| `curl` | Fetching the GTFS-Realtime feeds | `curl` |
+| `sh`, `dd`, `mktemp`, `printf`, `mkdir`, `mv`, `rm`, `dirname` | Reading and writing the saved-stations file | `coreutils` (in `base`) |
 
 Plus the Omarchy shell itself. **That is the whole list** — no interpreter, no
 API key, no pip or npm packages, and no static GTFS download at runtime.
@@ -38,8 +39,12 @@ API key, no pip or npm packages, and no static GTFS download at runtime.
 The coreutils row is not a real prerequisite in practice — those are in `base`,
 so every Arch system has them — but it is listed because the plugin does shell
 out for its state file. That is deliberate: `FileView` cannot bound a read, so
-the file is read through `head -c` with a byte cap and a symlink check, and
-written through an atomic `printf`-then-`mv`. See "State file" below.
+the file is read through a single `dd` open that carries its own guarantees and
+written through `mktemp`-then-`mv`. See "State file" below.
+
+Two of the read's flags (`count_bytes`, `fullblock`) are GNU `dd` extensions
+rather than POSIX. That is a real narrowing, and it is fine here because the
+plugin targets Arch, where `coreutils` is GNU and is in `base`.
 
 That is deliberately not the same claim as "there are no prerequisites."
 `Service.qml` spawns `notify-send`, and `libnotify` is in neither `base` nor
@@ -54,6 +59,25 @@ The MTA's GTFS-Realtime feeds need no key and no registration. Headway decodes
 the protobuf itself in QML's JavaScript engine, which is why there is no
 collector script and no language runtime to install — unlike its siblings
 `galley` and `colophon`, which shell out to Python.
+
+`curl` is the one prerequisite that is **not** optional. It is not in `base`
+either, though it arrives with almost everything; without it the widget cannot
+fetch a feed at all and the panel says so rather than degrading quietly, which
+is the difference between it and the `libnotify` row above.
+
+It is there because a poll must not reuse anything from the poll before it.
+QML's `XMLHttpRequest` is backed by one long-lived `QNetworkAccessManager`
+whose connection pool and DNS cache outlive any single request, so a routing
+change underneath the running shell — switching a Tailscale exit node, moving
+between networks, a VPN coming up — left every later poll reaching for sockets
+and addresses that no longer routed anywhere, until the shell was restarted. A
+`curl` process cannot carry that state across polls because it does not survive
+the poll. It also lets the fetch carry a byte ceiling (`--max-filesize`) and a
+timeout that is actually honoured (`--max-time`), neither of which QML's
+`XMLHttpRequest` offers.
+
+Note that `curl` is not a language runtime: the protobuf is still decoded in
+QML's JavaScript engine, and there is still no collector script.
 
 ## Install
 
@@ -163,17 +187,31 @@ lives in `~/.local/state/omarchy/settings/headway.json`, beside the shell's own
 It is read defensively, because a bar widget lives in the **shared** shell
 process and a stall there takes every other widget with it:
 
-- **Capped at 64 KiB** by `head -c` before a byte of it reaches QML. Four saved
-  stations is about 1 KB.
-- **Symlinks and non-regular files are rejected**, so the path cannot be aimed
-  at `/dev/zero` or at someone else's file.
+- **One open, no stat first.** The read is a single `dd` with
+  `iflag=nofollow,nonblock,count_bytes,fullblock`, so its guarantees ride on
+  `open(2)` itself. There is deliberately no check-then-open pair, because that
+  shape can be raced: the path can change between the check and the open.
+- **A symlink fails at open** with `ELOOP`, so the path cannot be aimed at
+  `/dev/zero` or at someone else's file.
+- **A FIFO cannot stall the shell.** `nonblock` means a planted pipe returns at
+  once instead of blocking the shared process — measured at 3 ms even with a
+  live writer holding it open, against a hang that would have been unbounded.
+- **Capped at 64 KiB** before a byte reaches QML. Four saved stations is ~1 KB.
 - **At most 50 stations** are consumed, and every field is length-checked and
   type-checked. A malformed entry is dropped, not trusted.
 - **Nothing watches the file.** Headway is its only legitimate writer, so it is
   read once at startup rather than re-read on every external change.
 
-Writes go to a sibling temp file and are renamed into place, so an interrupted
-write cannot leave a half-written file.
+Writes are equally defensive. The payload goes to a temp file created by
+`mktemp` — an unpredictable name, made `O_EXCL` at mode 0600, so there is
+nothing to pre-plant — written with `oflag=nofollow` so that even a guessed
+name cannot redirect it, `fsync`ed, and then `mv`-renamed into place. `rename(2)`
+replaces a symlinked destination rather than writing through it, and an
+interrupted write leaves the real file untouched.
+
+The commands themselves live in `State.js`, not as string literals in
+`Service.qml`, so `tests/state.test.js` can execute them against a symlink, a
+FIFO, an oversized file and a payload full of shell metacharacters.
 
 ## Troubleshooting
 

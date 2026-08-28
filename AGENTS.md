@@ -11,7 +11,9 @@ happened on this branch, not advice.
 | `Stations.js` | The station table's accessors: `byId`, `search`, `directionsFor`, `boroughName`, `parentOf`, `platformId`, haversine | same |
 | `StationData.js` | 496 generated station records. Do not hand-edit | same |
 | `Model.js` | Arrival assembly, alert classification, bar state, all display formatting | same |
-| `Service.qml` | I/O only: XHR polling, `FileView` state, `notify-send` | **The live shell only** |
+| `Fetch.js` | The curl argv, and the error text a curl exit code becomes | same |
+| `State.js` | The argv that reads and writes the saved-stations file | same |
+| `Service.qml` | I/O only: `curl` polling, shell-mediated state file, `notify-send` | **The live shell only** |
 | `Panel.qml` | Rendering only: the bar button, its badge, the panel | **The live shell only** |
 | `RouteBullet.qml` | One MTA route bullet — disc for local, diamond for express | **The live shell only** |
 

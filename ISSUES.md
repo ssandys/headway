@@ -19,19 +19,12 @@ the watcher events our own writes caused. The state file is no longer watched,
 and no longer written through `FileView` at all, so the counter and its
 cumulative-stranding bug are both gone.
 
-**N10 — an in-flight feed request can throw after the component is destroyed.**
-`Service.qml`'s XHR callbacks read `root.generation` to discard superseded
-responses. When the component is torn down mid-poll — a plugin hot-reload, or
-the widget being disabled — `root` is null and that read throws
-`TypeError: Cannot read property 'generation' of null` into the journal.
-
-*Impact:* cosmetic. The widget is going away at that moment, so nothing
-user-visible follows; it is one logged warning per teardown-with-poll-in-flight.
-Pre-existing rather than introduced by the v0.1.1 hardening — observed on
-2026-08-26, and again on 2026-08-27 from the released `ssandys.headway` build.
-
-*Suggested fix:* guard the callbacks with an explicit `if (!root) return`, or
-abort in-flight requests from `Component.onDestruction`.
+**N10 — RESOLVED at v0.1.2.** The throw needed an XHR callback outliving the
+component that owned it. There are no XHR callbacks now: each feed is fetched by
+a `curl` `Process` created as an `Instantiator` delegate, so a teardown destroys
+the delegate, which kills the child and takes its handlers with it. Probed by
+destroying `Service.qml` 250 ms into a poll and waiting six seconds — no throw.
+The XHR path was observed throwing on 2026-08-26 and again on 2026-08-27.
 
 **S2 — `nextDirection`'s stale-direction repair path is unreachable.**
 `Model.js` justifies its `return dirs[0]` fallback as letting a state file with
@@ -43,13 +36,10 @@ station does not serve is a terminal, and at a terminal the toggle is disabled
 `options` (making the justification true), or drop the justification and keep
 the fallback as plain defence.
 
-**S7 — `validStation` does not check that `routes` is an array.**
-`Service.qml` tests `typeof e.routes.length === "number"`, which admits a string
-and `{"length": 2}`. Neither throws downstream — `normalizeRoute` tolerates both
-— but the comment claims an is-an-array check.
-
-*Suggested fix:* `Object.prototype.toString.call(e.routes) === "[object Array]"`,
-which works in both engines.
+**S7 — RESOLVED at v0.1.1.** `validStation` now tests
+`Object.prototype.toString.call(e.routes) !== "[object Array]"` (`Service.qml:206`)
+rather than accepting anything with a numeric `.length`. The fix shipped with the
+state-file hardening; this entry was left open by oversight.
 
 ---
 
@@ -105,6 +95,8 @@ Raised, adjudicated, and left. Recorded so they are not reopened as discoveries.
 | Header-timestamp walk duplicated ~4 lines across two decoders | Four lines, two call sites. A shared helper would add an export to a file whose export list is the QML/node contract. |
 | `feedsForRoutes` output order depends on `for…in` enumeration | Insertion order is spec-guaranteed for string keys in both engines, and the only consumer iterates without caring. |
 | Unused `v` parameter in `decodeStopTimeUpdate` | House convention: every `visit` callback lists the prefix of the signature it uses. |
+| The state-file read does not assert `S_ISREG` on the descriptor | A shell cannot `fstat` a descriptor it does not hold, and `dd` exposes no regular-file `iflag`. Not load-bearing: a symlink fails with `ELOOP`, a FIFO cannot stall (`nonblock`), a directory fails with `EISDIR`, a socket with `ENXIO`, and any inode is bounded by the byte cap. A device node needs root to create. |
+| `--max-filesize` is inert when the body length is unknown | curl documents the flag as having no effect on a response with no `Content-Length`. The MTA sends one (measured: 218575 bytes), and `absorbFeed` re-checks `byteLength` after the fact, so an unbounded body would be rejected before decoding rather than before allocation. Revisit if the MTA ever switches to chunked encoding. |
 
 ---
 
@@ -115,5 +107,11 @@ Raised, adjudicated, and left. Recorded so they are not reopened as discoveries.
   instances either. See the README's Known limitations.
 - **Distances are always miles.** The unit is a one-function change
   (`Model.distanceText`) plus a manifest schema entry, deliberately deferred.
+- **A failed alerts poll waits out the full interval.** The alerts timer runs at
+  300s and does not retry sooner on failure, so a shell started during a network
+  outage shows no alerts for up to five minutes after connectivity returns, even
+  though arrivals recover on the next 30s/90s poll. Observed while testing the
+  curl migration; the XHR path behaved the same way. Alerts are advisory and the
+  previous list stands, so this is a delay rather than a wrong answer.
 - **Alert severity comes from the MTA's Mercury extension**, not GTFS `effect`,
   which is populated on zero alerts in practice. See `AGENTS.md`.

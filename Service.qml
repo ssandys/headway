@@ -1,8 +1,10 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "Fetch.js" as Fetch
 import "Gtfs.js" as Gtfs
 import "Model.js" as Model
+import "State.js" as State
 import "Stations.js" as Stations
 import "StationData.js" as StationData
 
@@ -43,10 +45,7 @@ Item {
   // as live.
   Timer {
     interval: 1000; running: true; repeat: true
-    onTriggered: {
-      root.nowSec = Math.floor(Date.now() / 1000)
-      root.sweepInflight()
-    }
+    onTriggered: root.nowSec = Math.floor(Date.now() / 1000)
   }
 
   // ONE handler. QML rejects a duplicate Component.onCompleted and the whole
@@ -154,20 +153,21 @@ Item {
     }
   }
 
-  // Bounded, symlink-rejecting, one-shot read. `head -c` caps the bytes that
-  // can ever reach QML; `-f` rejects a directory, device or fifo; `-L` rejects
-  // a symlink, so the path cannot be pointed at /dev/zero or someone else's
-  // file. coreutils is in `base`, so this adds no prerequisite.
+  // Bounded, symlink-rejecting, FIFO-proof, one-shot read. The flags and the
+  // reasoning live in State.js next to the tests that execute them; the short
+  // version is that there is no stat-then-open pair here to race, because the
+  // guarantees ride on the single open() itself.
   //
-  // Exits 0 with empty output when the file is absent, which is the
-  // first-run path and must not read as an error.
+  // Empty output when the file is absent is the first-run path and must not
+  // read as an error -- onRunningChanged below resolves it either way.
   Process {
     id: stateReader
     running: false
-    command: ["sh", "-c",
-      'p="$1"; [ -L "$p" ] && exit 0; [ -f "$p" ] || exit 0; ' +
-      'exec head -c "$2" -- "$p"',
-      "headway-state", root.statePath, String(root.stateByteLimit)]
+    command: State.readArgs(root.statePath, root.stateByteLimit)
+    // dd names a missing file on stderr, which on a first run is expected and
+    // not worth a journal line. Collected rather than inherited so it does not
+    // reach the shell's own stderr.
+    stderr: StdioCollector { waitForEnd: true }
     stdout: StdioCollector {
       // waitForEnd is REQUIRED, and omitting it is why the first attempt at
       // this read produced nothing at all: without it the collector does not
@@ -271,10 +271,7 @@ Item {
     var payload = root.pendingWrite
     if (payload === "") return
     root.pendingWrite = ""
-    stateWriter.command = ["sh", "-c",
-      'd=$(dirname -- "$1"); mkdir -p -- "$d" && ' +
-      'printf %s "$2" > "$1.tmp" && mv -f -- "$1.tmp" "$1"',
-      "headway-write", root.statePath, payload]
+    stateWriter.command = State.writeArgs(root.statePath, payload)
     stateWriter.running = true
   }
 
@@ -359,53 +356,130 @@ Item {
   property var tripLists: []
   property int maxTimestamp: 0
 
-  // Qt's XMLHttpRequest does not reliably honour the `timeout` property, so
-  // each request carries a deadline that the one-second tick sweeps. This
-  // path is also what the unreachable-feed state depends on, so it is not
-  // merely defensive.
-  //
-  // Deliberately NOT a Timer created per request via Qt.createQmlObject:
-  // that call appears nowhere in this shell or in galley/colophon, it
-  // recompiles QML at runtime, and it would create one object per feed per
-  // poll (up to eight every 30s) that must be explicitly destroyed.
-  property var inflight: []
+  // The feed timeout. curl honours it natively, which is why there is no
+  // deadline registry here any more. The XHR path needed one because Qt's
+  // XMLHttpRequest does not reliably honour its own `timeout` property, so
+  // every request carried a deadline that the one-second tick swept; the
+  // registry, the sweep and the settled-before-abort dance all existed to
+  // serve that one defect. --max-time replaces the lot, and stays shorter
+  // than the 30s open interval so a hung fetch cannot outlive its successor.
+  readonly property int feedTimeoutSec: 15
 
-  function fetchBytes(url, kind, onOk, onFail) {
-    var xhr = new XMLHttpRequest()
-    // `kind` is "trips" or "alerts". abortInflight() supersedes only trip
-    // fetches — the alerts poll shares this list and runs on its own timer.
-    var entry = { xhr: xhr, kind: kind, deadline: root.nowSec + 15,
-                  settled: false, onFail: onFail }
-    // Reassign, never push in place: mutating a QML `var` array property
-    // does not fire a change notification, so bindings would not see it.
-    var queued = root.inflight.slice()
-    queued.push(entry)
-    root.inflight = queued
-    xhr.open("GET", url)
-    xhr.responseType = "arraybuffer"
-    xhr.onreadystatechange = function () {
-      if (xhr.readyState !== XMLHttpRequest.DONE || entry.settled) return
-      entry.settled = true
-      if (xhr.status !== 200) { onFail("HTTP " + xhr.status); return }
-      onOk(new Uint8Array(xhr.response))
+  // Hard ceiling on a single feed body. Measured live: the numbered-lines feed
+  // ran 67 KB at one hour and 222 KB at the next, so this is a wide margin
+  // rather than a tuned figure -- the size tracks how many trains are moving.
+  //
+  // The XHR path had NO ceiling at all: `new Uint8Array(xhr.response)` took
+  // whatever arrived. The feed is the one input here an attacker can actually
+  // influence -- a hostile exit node, a hijacked DNS answer, a MITM -- and it
+  // was the only unbounded read left once the state file was capped. curl
+  // aborts on the Content-Length BEFORE writing a byte to stdout (verified: 0
+  // bytes reach the pipe), so an oversized body never reaches this heap.
+  readonly property int feedByteLimit: 4194304
+
+  // One curl per feed of the CURRENT refresh, spawned by an Instantiator over
+  // this list. Each entry is { url, gen }.
+  //
+  // Reassigning the list IS the supersede: the Instantiator destroys the old
+  // delegates, and destroying a Process kills its child. Measured -- three
+  // `sleep 60` children spawned, model cleared, all three reaped, no orphans.
+  // That is the whole of what abortInflight() used to do by hand.
+  //
+  // Deliberately an Instantiator and not Qt.createQmlObject, which appears
+  // nowhere in this shell or in galley/colophon and recompiles QML at runtime.
+  // An Instantiator instantiates a Component that was compiled with the file.
+  //
+  // The alerts fetch is deliberately NOT in this list. It runs on its own 300s
+  // timer, and the old shared registry meant superseding a trips refresh could
+  // silently drop an in-flight alerts request, delaying a "no service"
+  // notification by up to five minutes because someone pressed `r`. Keeping it
+  // out of the model makes that separation structural rather than a filter.
+  property var feedQueue: []
+
+  Instantiator {
+    model: root.feedQueue
+    delegate: Process {
+      id: feedProc
+      required property var modelData
+
+      command: Fetch.curlArgs(feedProc.modelData.url, root.feedByteLimit,
+                              root.feedTimeoutSec)
+
+      // exited() and streamFinished() have NO guaranteed ordering, so neither
+      // alone can decide the outcome: with --fail an HTTP error is an empty
+      // stdout plus a non-zero code, and reading only the stream would turn a
+      // server error into a silently empty feed. Both must land before this
+      // resolves. A delegate destroyed mid-flight never resolves at all, which
+      // is correct -- it was superseded, and the next refresh resets `pending`.
+      property bool sawExit: false
+      property bool sawStream: false
+      property int exitCode: 0
+      property var payload: null
+
+      function settle() {
+        if (!feedProc.sawExit || !feedProc.sawStream) return
+        root.absorbFeed(feedProc.modelData.gen, feedProc.exitCode, feedProc.payload)
+      }
+
+      stdout: StdioCollector {
+        // waitForEnd, for the reason the state reader documents: without it the
+        // collector does not hold the stream open to the end, so onStreamFinished
+        // never delivers a complete payload.
+        waitForEnd: true
+        onStreamFinished: {
+          feedProc.payload = data
+          feedProc.sawStream = true
+          feedProc.settle()
+        }
+      }
+
+      // curl writes its own diagnosis here. The exit code is the contract, but
+      // swallowing stderr would make a failed spawn indistinguishable from an
+      // empty feed in the journal.
+      stderr: StdioCollector {
+        waitForEnd: true
+        onStreamFinished: if (text.length) console.warn("headway: curl: " + text)
+      }
+
+      onExited: function (code) {
+        feedProc.exitCode = code
+        feedProc.sawExit = true
+        feedProc.settle()
+      }
+
+      // Set here rather than bound: `command` must be resolved before start.
+      Component.onCompleted: feedProc.running = true
     }
-    xhr.send()
   }
 
-  function sweepInflight() {
-    var keep = []
-    for (var i = 0; i < root.inflight.length; i++) {
-      var e = root.inflight[i]
-      if (e.settled) continue
-      if (root.nowSec > e.deadline) {
-        e.settled = true
-        e.xhr.abort()
-        e.onFail("timed out")
-        continue
-      }
-      keep.push(e)
+  // Where a finished curl lands, whatever it was carrying.
+  function absorbFeed(gen, exitCode, payload) {
+    if (gen !== root.generation) return
+    if (exitCode !== 0) { root.finishFeed(false, Fetch.errorText(exitCode)); return }
+    // Defence in depth behind --max-filesize, which curl documents as inert
+    // when the body length is not known in advance. The MTA sends a
+    // Content-Length today (measured), so the flag does work -- but that is a
+    // property of their server, not a guarantee, and this costs one compare.
+    if (!payload || payload.byteLength > root.feedByteLimit) {
+      root.finishFeed(false, "feed too large")
+      return
     }
-    root.inflight = keep
+    // Gtfs.js throws on a malformed or truncated buffer rather than returning
+    // garbage. A body cut off mid-stream is a realistic input, and an uncaught
+    // throw here escapes into the shell process, so the decode is wrapped and
+    // routed to the same failure path as a transport error.
+    var decoded
+    try {
+      decoded = Gtfs.decodeTripUpdates(new Uint8Array(payload))
+    } catch (e) {
+      root.finishFeed(false, "malformed feed: " + e.message)
+      return
+    }
+    var lists = root.tripLists.slice()
+    lists.push(decoded.trips)
+    root.tripLists = lists
+    if (decoded.timestamp > root.maxTimestamp) root.maxTimestamp = decoded.timestamp
+    root.finishFeed(true, "")
   }
 
   // Bumped by every refresh. A callback belonging to a superseded refresh
@@ -424,32 +498,14 @@ Item {
   // the ordinary way to hit this.
   property int generation: 0
 
-  function abortInflight() {
-    var keep = []
-    for (var i = 0; i < root.inflight.length; i++) {
-      var e = root.inflight[i]
-      if (e.settled) continue
-      // Supersede ONLY trip fetches. The alerts poll runs on its own 300s
-      // timer and shares this list; aborting it here would silently drop an
-      // in-flight alerts request, delaying a "no service" notification by up
-      // to five minutes because someone pressed `r` or switched station.
-      if (e.kind !== "trips") { keep.push(e); continue }
-      // Mark settled BEFORE aborting: abort() fires readystatechange with
-      // DONE, and the existing `entry.settled` guard is what swallows it.
-      e.settled = true
-      e.xhr.abort()
-    }
-    root.inflight = keep
-  }
-
   function refresh() {
     // Supersede and bump FIRST, before any early return. Otherwise a refresh
-    // that bails out — no saved station, or a station whose routes map to no
-    // feed — leaves the previous generation's requests live AND current. When
-    // they land, finishFeed calls Model.arrivalsFor(root.saved, …) with
-    // `saved` now null, which THROWS inside an XHR callback. Reachable by
-    // removing your only saved station while a poll is in flight.
-    root.abortInflight()
+    // that bails out -- no saved station, or a station whose routes map to no
+    // feed -- leaves the previous generation's fetches live AND current. When
+    // they land, finishFeed calls Model.arrivalsFor(root.saved, ...) with
+    // `saved` now null, which THROWS. Reachable by removing your only saved
+    // station while a poll is in flight.
+    root.feedQueue = []
     root.generation = root.generation + 1
     var gen = root.generation
     if (!root.saved) { root.arrivals = []; root.loading = false; return }
@@ -460,31 +516,13 @@ Item {
     root.tripLists = []
     root.maxTimestamp = 0
     root.pending = feeds.length
+    // Built whole, then assigned once. Mutating a QML `var` array in place
+    // fires no change notification, so the Instantiator would not see it.
+    var queue = []
     for (var i = 0; i < feeds.length; i++) {
-      fetchBytes(Gtfs.feedUrl(feeds[i]), "trips", function (bytes) {
-        if (gen !== root.generation) return
-        // Gtfs.js throws on a malformed or truncated buffer rather than
-        // returning garbage. A dropped connection mid-body is a realistic
-        // input, and an uncaught throw here escapes into the shell process,
-        // so the decode is wrapped and routed to the same failure path as an
-        // HTTP error.
-        var decoded
-        try {
-          decoded = Gtfs.decodeTripUpdates(bytes)
-        } catch (e) {
-          root.finishFeed(false, "malformed feed: " + e.message)
-          return
-        }
-        var lists = root.tripLists.slice()
-        lists.push(decoded.trips)
-        root.tripLists = lists
-        if (decoded.timestamp > root.maxTimestamp) root.maxTimestamp = decoded.timestamp
-        root.finishFeed(true, "")
-      }, function (why) {
-        if (gen !== root.generation) return
-        root.finishFeed(false, why)
-      })
+      queue.push({ url: Gtfs.feedUrl(feeds[i]), gen: gen })
     }
+    root.feedQueue = queue
   }
 
   function finishFeed(succeeded, why) {
@@ -520,18 +558,42 @@ Item {
   }
 
   function refreshAlerts() {
-    fetchBytes(Gtfs.ALERTS_URL, "alerts", function (bytes) {
-      // Same guard as the trip decode: a malformed body must not throw into
-      // the shell. Alerts are advisory, so a failure leaves the previous
-      // alert list standing rather than blanking it.
-      try {
-        var decoded = Gtfs.decodeAlerts(bytes)
-        root.alerts = decoded.alerts
-        root.checkNewAlerts()
-      } catch (e) {
-        // keep the last good alerts
+    // Assigning command while the process runs is a silent no-op, so an
+    // overlapping poll is skipped rather than clobbering the one in flight.
+    // A 15s timeout inside a 300s interval means this cannot happen today; it
+    // is here because the state writer documents the same trap.
+    if (alertsFetcher.running) return
+    alertsFetcher.command = Fetch.curlArgs(Gtfs.ALERTS_URL, root.feedByteLimit,
+                                           root.feedTimeoutSec)
+    alertsFetcher.running = true
+  }
+
+  // Alerts are advisory. A failure leaves the previous list standing rather
+  // than blanking it, and never touches `ok`/`error`, which describe arrivals.
+  Process {
+    id: alertsFetcher
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        // Empty stdout is how a curl failure arrives here, since --fail makes
+        // an HTTP error a code rather than a body. Nothing to decode, and
+        // nothing to report: the previous alerts stand.
+        if (!data || data.byteLength === 0) return
+        if (data.byteLength > root.feedByteLimit) return
+        try {
+          var decoded = Gtfs.decodeAlerts(new Uint8Array(data))
+          root.alerts = decoded.alerts
+          root.checkNewAlerts()
+        } catch (e) {
+          // keep the last good alerts
+        }
       }
-    }, function (why) { /* alerts are advisory; a failure must not blank arrivals */ })
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (text.length) console.warn("headway: curl (alerts): " + text)
+    }
   }
 
   Timer {
