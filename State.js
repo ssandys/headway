@@ -80,9 +80,29 @@ function writeArgs(statePath, payload) {
   return ["sh", "-c", script, "headway-write", statePath, payload]
 }
 
+// What a non-zero exit from the writer means, in terms of what the user lost.
+//
+// The write was fire-and-forget: no exit code was read, so an unwritable
+// settings directory, a full disk or a failed mktemp dropped the saved station
+// with no signal. The panel kept showing it -- root.stations is updated in
+// memory before the write -- so the loss only appeared on the next restart.
+//
+// No code is mapped individually because there is nothing to map: every failure
+// path in writeArgs exits 1 by hand, and the script's own tools do not have a
+// code vocabulary worth translating. What matters is naming the consequence.
+function writeErrorText(exitCode) {
+  if (exitCode === 0) return ""
+  // Not an exit code from the script at all. Quickshell's Process never emits
+  // exited() on a failed SPAWN, so the writer synthesises 127 -- the shell
+  // convention for command-not-found -- for an sh that would not start.
+  if (exitCode === 127) return "cannot run sh to save the station list"
+  return "could not save the station list (exit " + exitCode + ")"
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readArgs: readArgs,
-    writeArgs: writeArgs
+    writeArgs: writeArgs,
+    writeErrorText: writeErrorText
   }
 }

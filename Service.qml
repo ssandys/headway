@@ -144,12 +144,31 @@ Item {
   Process {
     id: stateWriter
     running: false
+    // Set false by flushState immediately before each spawn, so the deferred
+    // check below can tell an exit from a spawn that never happened.
+    property bool sawExit: false
+    onExited: function (code) {
+      stateWriter.sawExit = true
+      // The failure is reported, not retried. Re-queueing the payload would
+      // spin against the cause -- a read-only settings directory does not
+      // become writable between attempts -- and the state is not lost in the
+      // meantime: root.stations still holds it, and the next change writes it
+      // again from live state rather than from a stale queued string.
+      if (code !== 0) console.warn("headway: " + State.writeErrorText(code))
+    }
     onRunningChanged: {
       // runningChanged, not exited, for the reason the notifier documents:
       // Quickshell's Process never emits exited() on a failed spawn, so an
       // exited-only handler would strand a queued write forever.
       if (stateWriter.running) return
+      // Queued before the re-flush below so it reads sawExit from the run that
+      // just ended, not from the one the re-flush may start.
+      Qt.callLater(stateWriter.reportFailedSpawn)
       if (root.pendingWrite !== "") Qt.callLater(root.flushState)
+    }
+    function reportFailedSpawn() {
+      if (stateWriter.sawExit) return
+      console.warn("headway: " + State.writeErrorText(127))
     }
   }
 
@@ -271,6 +290,7 @@ Item {
     var payload = root.pendingWrite
     if (payload === "") return
     root.pendingWrite = ""
+    stateWriter.sawExit = false
     stateWriter.command = State.writeArgs(root.statePath, payload)
     stateWriter.running = true
   }
@@ -588,9 +608,33 @@ Item {
     // A 15s timeout inside a 300s interval means this cannot happen today; it
     // is here because the state writer documents the same trap.
     if (alertsFetcher.running) return
+    alertsFetcher.sawExit = false
     alertsFetcher.command = Fetch.curlArgs(Gtfs.ALERTS_URL, root.feedByteLimit,
                                            root.feedTimeoutSec)
     alertsFetcher.running = true
+  }
+
+  // Consecutive failed alerts polls. Drives the retry interval only; alerts are
+  // advisory, so this never reaches `ok`/`error`, which describe arrivals.
+  property int alertsFailures: 0
+
+  // Every finished alerts poll lands here, including the ones that produced no
+  // body. Before this, a failure was an early return inside the stdout handler:
+  // a dead resolver, a missing curl and a genuinely empty feed were one silent
+  // path, and the exit code curl had already computed was discarded.
+  function settleAlerts(code) {
+    if (code === 0) {
+      root.alertsFailures = 0
+      return
+    }
+    root.alertsFailures++
+    // curl's own stderr is already collected and warned below. This adds the
+    // exit code's meaning, which stderr does not carry at all when the failure
+    // is a spawn that never produced any.
+    console.warn("headway: alerts: " + Fetch.errorText(code)
+                 + " (retrying in "
+                 + Fetch.retryDelaySec(root.alertsFailures, root.alertsInterval)
+                 + "s)")
   }
 
   // Alerts are advisory. A failure leaves the previous list standing rather
@@ -598,6 +642,22 @@ Item {
   Process {
     id: alertsFetcher
     running: false
+    // Reset by refreshAlerts immediately before each spawn. Same role as the
+    // state writer's: an exit that never arrives is a spawn that never
+    // happened, which is the one failure curl cannot report on stderr.
+    property bool sawExit: false
+    onExited: function (code) {
+      alertsFetcher.sawExit = true
+      root.settleAlerts(code)
+    }
+    onRunningChanged: {
+      if (alertsFetcher.running) return
+      Qt.callLater(alertsFetcher.reportFailedSpawn)
+    }
+    function reportFailedSpawn() {
+      if (alertsFetcher.sawExit) return
+      root.settleAlerts(127)
+    }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -628,8 +688,13 @@ Item {
     onTriggered: root.refresh()
   }
 
+  // The interval shortens while alerts are failing and returns to the configured
+  // one on the first success. Rebinding a running Timer's interval re-arms it,
+  // which is the intent: the retry is measured from the poll that failed, not
+  // from the schedule that poll was already on. Measured with the interval set
+  // to 60s and the resolver failing: first poll at T+2ms, next at T+30003ms.
   Timer {
-    interval: root.alertsInterval * 1000
+    interval: Fetch.retryDelaySec(root.alertsFailures, root.alertsInterval) * 1000
     running: true; repeat: true; triggeredOnStart: true
     onTriggered: root.refreshAlerts()
   }

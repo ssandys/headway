@@ -71,3 +71,56 @@ test("errorText names a missing curl, which is a failed spawn rather than an exi
   // it, so the sentinel cannot collide with a real curl failure.
   assert.match(Fetch.errorText(127), /not installed|not found/i)
 })
+
+// ---------------------------------------------------------------------------
+// Backing off a failed alerts poll (issue #9)
+//
+// Alerts poll on a 300s timer that does not shorten on failure, so a shell
+// started during a network outage shows no alerts for up to five minutes after
+// arrivals have already recovered on the next 30s poll. Retrying at the
+// arrivals cadence forever is the other failure -- a missing curl would then
+// spawn a doomed process every 30s indefinitely -- so the delay grows back.
+
+test("retryDelaySec uses the normal interval when nothing has failed", () => {
+  assert.equal(Fetch.retryDelaySec(0, 300), 300)
+})
+
+test("retryDelaySec retries the first failure well inside the normal interval", () => {
+  // The point of the fix: recover with arrivals, not five minutes after them.
+  const delay = Fetch.retryDelaySec(1, 300)
+  assert.ok(delay <= 30, "first retry should be prompt, got " + delay)
+  assert.ok(delay > 0, "and must still be a delay, got " + delay)
+})
+
+test("retryDelaySec backs off as failures repeat", () => {
+  const first = Fetch.retryDelaySec(1, 300)
+  const second = Fetch.retryDelaySec(2, 300)
+  const third = Fetch.retryDelaySec(3, 300)
+  assert.ok(second > first, "second retry must wait longer than the first")
+  assert.ok(third > second, "and the third longer than the second")
+})
+
+test("retryDelaySec never polls slower than the normal interval", () => {
+  // A sustained outage must settle back to the configured cadence, not drift
+  // past it and leave alerts stale long after the feed returns.
+  for (let n = 0; n <= 20; n++) {
+    assert.ok(Fetch.retryDelaySec(n, 300) <= 300,
+      "failure " + n + " waited longer than the interval")
+  }
+})
+
+test("retryDelaySec never polls faster than a short configured interval", () => {
+  // alertsIntervalSec is a setting. If someone sets it below the retry floor,
+  // the retry must not become a speed-up.
+  for (let n = 0; n <= 5; n++) {
+    assert.ok(Fetch.retryDelaySec(n, 10) <= 10,
+      "failure " + n + " polled faster than the configured 10s")
+  }
+})
+
+test("retryDelaySec treats a nonsense failure count as no failure", () => {
+  ;[-1, NaN, null, undefined, "2"].forEach(function (bad) {
+    assert.equal(Fetch.retryDelaySec(bad, 300), 300,
+      "count " + String(bad) + " should fall back to the normal interval")
+  })
+})

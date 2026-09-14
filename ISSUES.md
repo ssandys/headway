@@ -107,11 +107,13 @@ Raised, adjudicated, and left. Recorded so they are not reopened as discoveries.
   instances either. See the README's Known limitations.
 - **Distances are always miles.** The unit is a one-function change
   (`Model.distanceText`) plus a manifest schema entry, deliberately deferred.
-- **A failed alerts poll waits out the full interval.** The alerts timer runs at
-  300s and does not retry sooner on failure, so a shell started during a network
-  outage shows no alerts for up to five minutes after connectivity returns, even
-  though arrivals recover on the next 30s/90s poll. Observed while testing the
-  curl migration; the XHR path behaved the same way. Alerts are advisory and the
-  previous list stands, so this is a delay rather than a wrong answer.
+- **A failed alerts poll no longer waits out the full interval.** RESOLVED at
+  v0.1.3. The alerts timer ran at 300s and did not retry sooner on failure, so a
+  shell started during an outage showed no alerts for up to five minutes after
+  arrivals had already recovered on the next 30s/90s poll. It now retries at 30s
+  and doubles back to the configured interval (`Fetch.retryDelaySec`), so a
+  sustained outage settles at the normal cadence instead of spawning a doomed
+  process every 30s forever. Measured with the interval set to 60s and the
+  resolver failing: first poll at T+2ms, next at T+30003ms.
 - **Alert severity comes from the MTA's Mercury extension**, not GTFS `effect`,
   which is populated on zero alerts in practice. See `AGENTS.md`.

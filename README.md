@@ -171,7 +171,7 @@ Configure per-widget through Omarchy's plugin settings.
 |---|---|---|
 | `pollIntervalOpenSec` | `30` | Feed poll interval while the panel is open |
 | `pollIntervalIdleSec` | `90` | Feed poll interval while idle |
-| `alertsIntervalSec` | `300` | Service-alert refresh interval |
+| `alertsIntervalSec` | `300` | Service-alert refresh interval. A failed poll retries after 30s and doubles back to this value, so alerts recover with arrivals rather than up to an interval later |
 | `staleAfterSec` | `180` | Treat data older than this as stale |
 | `trainsPerDirection` | `3` | Arrivals to list per direction |
 | `notifyRouteAlert` | `true` | Notify on a new alert for a saved route |

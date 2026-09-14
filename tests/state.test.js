@@ -158,3 +158,42 @@ test("dd's nofollow refuses a symlinked output, which is what protects the temp 
   assert.notEqual(r.code, 0, "dd must refuse to open a symlink for writing")
   assert.equal(fs.readFileSync(victim, "utf8"), "ORIGINAL")
 })
+
+// ---------------------------------------------------------------------------
+// Reporting a failed write (issue #8)
+//
+// The write is fire-and-forget today: stateWriter's onRunningChanged re-queues
+// a pending payload and never reads the exit code, so a read-only settings
+// directory, a full disk or an unwritable temp loses the saved station with no
+// signal at all. The panel keeps showing it because root.stations was already
+// updated in memory, so the loss only surfaces on the next shell restart.
+
+test("writeErrorText says nothing when the write succeeded", () => {
+  assert.equal(State.writeErrorText(0), "")
+})
+
+test("writeErrorText never returns empty for a failure it does not recognise", () => {
+  // Same rule as Fetch.errorText: a silent empty string is how this bug got
+  // filed in the first place. An unmapped code must still name itself.
+  const unmapped = [1, 2, 13, 28]
+  unmapped.forEach(function (code) {
+    const text = State.writeErrorText(code)
+    assert.notEqual(text, "", "exit " + code + " must still say something")
+    assert.match(text, new RegExp(String(code)), "and must name the code")
+  })
+})
+
+test("writeErrorText names a missing shell, which is a failed spawn rather than an exit", () => {
+  // writeArgs runs `sh -c`, and Quickshell's Process never emits exited() on a
+  // failed SPAWN -- the same hole that stranded the feed poll in 8247826. The
+  // writer synthesises 127 for it, so the text must not read as a script error.
+  assert.match(State.writeErrorText(127), /sh|shell/i)
+})
+
+test("writeErrorText says what was lost, not just that something failed", () => {
+  // The user-visible consequence is a station that silently will not come back
+  // after a restart. A line reading only "exit 1" does not let anyone act.
+  ;[1, 127].forEach(function (code) {
+    assert.match(State.writeErrorText(code), /save|saved|station/i)
+  })
+})

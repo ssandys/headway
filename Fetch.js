@@ -64,9 +64,27 @@ function errorText(exitCode) {
   }
 }
 
+// How long to wait before the next alerts poll, given how many have failed in a
+// row. Alerts run on their own 300s timer that never shortened on failure, so a
+// shell started during an outage showed no alerts for up to five minutes after
+// arrivals had already recovered on the next 30s poll.
+//
+// Retrying at the arrivals cadence forever is the opposite failure: a missing
+// curl would spawn a doomed process every 30s for as long as the shell runs. So
+// the delay doubles back toward the configured interval and stops there. The
+// normal interval is a ceiling AND a floor -- alertsIntervalSec is a setting,
+// and a retry must never turn a short interval into a faster poll.
+function retryDelaySec(consecutiveFailures, normalIntervalSec) {
+  var n = consecutiveFailures
+  if (typeof n !== "number" || !isFinite(n) || n < 1) return normalIntervalSec
+  var delay = 30 * Math.pow(2, Math.floor(n) - 1)
+  return delay < normalIntervalSec ? delay : normalIntervalSec
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     curlArgs: curlArgs,
-    errorText: errorText
+    errorText: errorText,
+    retryDelaySec: retryDelaySec
   }
 }
