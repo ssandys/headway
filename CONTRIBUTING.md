@@ -1,4 +1,4 @@
-# AGENTS.md — extending Headway
+# Contributing to Headway
 
 Read this before changing anything. Most of it is failures that already
 happened on this branch, not advice.

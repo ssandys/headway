@@ -472,7 +472,7 @@ test("barState and tooltipText survive a saved station with no routes", () => {
 test("dedupeTrips is not fooled by a prototype-chain tripId", () => {
   // F14. `seen[key]` walks the prototype chain, so a tripId of "constructor"
   // reads as already-seen and a real train is dropped from the arrivals list.
-  // Same class as the classifyAlert bug that was fixed; AGENTS.md states this
+  // Same class as the classifyAlert bug that was fixed; CONTRIBUTING.md states this
   // as an absolute rule for any table keyed on upstream data.
   // Two directions, and the first draft only tested one. Three DIFFERENT
   // prototype keys surviving proves the READ is guarded; it passes just as

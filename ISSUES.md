@@ -68,7 +68,7 @@ the header reads `Headway` and not `Headway (dev)`. It now shows the route
 bullets on alert rows and the direction button on every saved row, both of which
 the README describes.
 
-**S4 — "195 alerts filter down to 7" in `AGENTS.md` is not reproducible.**
+**S4 — "195 alerts filter down to 7" in `CONTRIBUTING.md` is not reproducible.**
 Measured at the fixture's own header timestamp (1787689797): **9** active, of
 which **1** is amber or red. The surrounding figures were corrected; this one
 was left.
@@ -116,4 +116,4 @@ Raised, adjudicated, and left. Recorded so they are not reopened as discoveries.
   process every 30s forever. Measured with the interval set to 60s and the
   resolver failing: first poll at T+2ms, next at T+30003ms.
 - **Alert severity comes from the MTA's Mercury extension**, not GTFS `effect`,
-  which is populated on zero alerts in practice. See `AGENTS.md`.
+  which is populated on zero alerts in practice. See `CONTRIBUTING.md`.
