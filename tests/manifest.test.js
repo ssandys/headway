@@ -1,7 +1,7 @@
 // tests/manifest.test.js
 const test = require("node:test")
 const assert = require("node:assert/strict")
-const { readFileSync } = require("node:fs")
+const { readFileSync, readdirSync } = require("node:fs")
 const { join } = require("node:path")
 
 const manifest = JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8"))
@@ -59,5 +59,24 @@ test("the devkit scripts carry no plugin-specific literal", () => {
       assert.ok(!functional.includes(literal.toLowerCase()),
         `${script} must not hardcode "${literal}" — it is derived from manifest.json`)
     }
+  }
+})
+
+test("manifest.json is the only file that declares a version", () => {
+  // package.json sat at 0.1.0 while the manifest shipped 0.1.2, silently,
+  // across two releases. Asserting the two agree would only catch that after
+  // it happened; package.json calls itself a build and test harness and
+  // nothing reads its version at all, so deleting the second declaration
+  // leaves nothing to drift. This test is what keeps it deleted.
+  const root = join(__dirname, "..")
+  const jsonFiles = readdirSync(root).filter((f) => f.endsWith(".json"))
+  assert.ok(jsonFiles.includes("manifest.json"), "the manifest is still here")
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/,
+    "and still carries the version the marketplace reads")
+  for (const file of jsonFiles) {
+    if (file === "manifest.json") continue
+    const parsed = JSON.parse(readFileSync(join(root, file), "utf8"))
+    assert.ok(!("version" in parsed),
+      `${file} declares a version; manifest.json is the only source of truth`)
   }
 })

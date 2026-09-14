@@ -92,6 +92,7 @@ you reintroduce this bug and no test in this repo will tell you.
 | **A hidden item cannot hold `activeFocus`** | Focus a text field only once its panel is visible. |
 | **Typing does not break a QML binding** | A `TextField`'s `text` must be routed into the state its consumers read, or the results binding never updates. |
 | **`qml6`, not `qml`** | The unversioned binary is either absent or Qt 5. |
+| **One version, in `manifest.json`** | `package.json` is a harness and carries no version field on purpose. It sat at 0.1.0 while the manifest shipped 0.1.2 across two releases; a second declaration is only ever a chance to drift. Guarded by `tests/manifest.test.js`. |
 
 ### Nothing in this toolchain gates QML syntax
 

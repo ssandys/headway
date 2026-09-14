@@ -1,6 +1,5 @@
 {
   "name": "headway",
-  "version": "0.1.0",
   "private": true,
   "description": "Build and test harness only. The plugin itself has zero runtime dependencies.",
   "scripts": {
