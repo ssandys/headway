@@ -45,12 +45,25 @@ state-file hardening; this entry was left open by oversight.
 
 ## Correctness, unreachable today
 
-**S8 — `Stations.search` still yields `NaN` on a non-finite *station*
-coordinate.** The F7 fix guarded the *origin* only. A table row with a bad `lat`
-sorts first with `distanceKm: NaN`. Measured: 0 of 496 committed rows are
-non-finite, and `scripts/build-stations.mjs` now throws on a non-finite
-`gtfs_latitude`/`gtfs_longitude`, which closes the only route by which such a
-row could be generated.
+**S8 — RESOLVED at v0.1.5.** `Stations.search` yielded `NaN` on a non-finite
+*station* coordinate: the F7 fix guarded the *origin* only, so a bad `lat`
+reached `haversineKm` and `Model.distanceText` rendered the result as the
+literal string `"NaN mi"`. Both ends now go through one `hasFiniteCoords`
+rather than two copies of the same conjunction — the copies are what drifted.
+
+**This entry was itself wrong** for as long as it stood, and the correction is
+the point: it said such a row "sorts first". It does not. The comparator
+reaches `a.distanceKm - b.distanceKm` whenever the two differ, and `NaN`
+differs from everything including itself, so it returns `NaN`, which sorts
+treat as 0 — the row pins wherever it started. Measured with a three-row table:
+the bad row came back **second of three**, and the good rows around it came
+back far-then-near instead of near-then-far. The damage was quieter than
+advertised and strictly worse: not a misplaced row, a list that stops being
+ordered.
+
+It was never reachable from committed data — 0 of 496 rows are non-finite and
+`scripts/build-stations.mjs` throws on one — so the fix moves the property from
+holding by upstream accident to holding by construction.
 
 **S6 — `skipGroup` does not check that `END_GROUP`'s field number matches its
 `START_GROUP`.** Protobuf requires the match. Being more permissive than the
@@ -68,19 +81,21 @@ the header reads `Headway` and not `Headway (dev)`. It now shows the route
 bullets on alert rows and the direction button on every saved row, both of which
 the README describes.
 
-**S4 — "195 alerts filter down to 7" in `CONTRIBUTING.md` is not reproducible.**
-Measured at the fixture's own header timestamp (1787689797): **9** active, of
-which **1** is amber or red. The surrounding figures were corrected; this one
-was left.
+**S4 — RESOLVED at v0.1.5.** "195 alerts filter down to 7" in
+`CONTRIBUTING.md` did not reproduce. Re-measured at the fixture's own header
+timestamp (1787689797): the 195 decode to **9 active**, of which 1 is amber and
+none red. The line now states that, with the timestamp it was measured at, so
+the next person can re-run it.
 
-*Suggested fix:* restate as "9 active, 1 amber/red at the fixture's timestamp",
-or drop the number.
-
-**S5 — `build-stations.mjs`'s tolerance comment is factually wrong.** It says "a
-terminal has no label for the direction it does not serve". Measured: **0 of
-496** rows have an empty `labelN` or `labelS` — a terminal carries the literal
-string `"Last Stop"`, which is exactly what `Stations.directionsFor` filters on.
-The tolerant branch is harmless; its justification is false.
+**S5 — RESOLVED at v0.1.5.** `build-stations.mjs`'s tolerance comment gave two
+justifications and **both** were false of the data — this entry had only caught
+one. It claimed a terminal has no label for the direction it does not serve:
+0 of 496 rows have an empty `labelN` or `labelS`, and a terminal carries the
+literal `"Last Stop"`, which is exactly what `Stations.directionsFor` filters
+on. It also claimed a station in no complex has no complex id: all 496 carry
+one, including the **410** that are alone in their complex. The fallbacks stay
+— they are defence against a feed schema change — but the comment now says so
+instead of citing gaps nobody observed.
 
 ---
 

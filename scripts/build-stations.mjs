@@ -61,9 +61,14 @@ const stations = rows
     routes: need(r, "daytime_routes", "string", i).split(/\s+/).filter(Boolean),
     borough: need(r, "borough", "string", i),
     line: need(r, "line", "string", i),
-    // complex_id and the direction labels are legitimately absent on some rows:
-    // a station in no complex has no complex id, and a terminal has no label
-    // for the direction it does not serve. These stay tolerant on purpose.
+    // Tolerant on purpose, but NOT for the reason this comment used to give.
+    // It claimed a station in no complex has no complex id, and that a
+    // terminal has no label for the direction it does not serve. Both are
+    // false of the data: all 496 rows carry a complex id -- including the 410
+    // that are alone in their complex -- and all 496 carry both labels, a
+    // terminal spelling the unserved direction "Last Stop", which is exactly
+    // what Stations.directionsFor filters on. The fallbacks are defence
+    // against a feed schema change, not a response to gaps anyone observed.
     complexId: typeof r.complex_id === "string" ? r.complex_id : "",
     lat: need(r, "gtfs_latitude", "number", i),
     lon: need(r, "gtfs_longitude", "number", i),
