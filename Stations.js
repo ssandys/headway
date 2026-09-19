@@ -78,6 +78,18 @@ function directionsFor(station) {
   return out
 }
 
+// True only when both coordinates are real, finite numbers.
+//
+// Used for the origin AND for every station row, deliberately through one
+// function rather than two copies of the same conjunction. The copies are what
+// drifted: the origin was guarded, the station was not, and the gap survived a
+// fix that was written to close exactly this class of bug (S8).
+function hasFiniteCoords(p) {
+  return !!p &&
+    typeof p.lat === "number" && isFinite(p.lat) &&
+    typeof p.lon === "number" && isFinite(p.lon)
+}
+
 // Returns rows carrying `distanceKm` (null with no origin). Ordered by
 // distance when an origin is known, alphabetically otherwise -- then grouped
 // so stations sharing a complex stay adjacent, since scattering them across
@@ -87,13 +99,11 @@ function search(stations, query, origin, limit) {
   var needle = (query || "").toLowerCase()
   // An origin is only usable if BOTH coordinates are real numbers. haversineKm
   // on a non-numeric coordinate returns NaN, and `a.distanceKm - b.distanceKm`
-  // is then NaN for every pair -- a comparator that answers "neither", which
-  // leaves the rows in raw table order while the UI still labels them
-  // nearest-first. Degrading to the alphabetical branch is honest; a silently
-  // scrambled "nearest" list is not.
-  var usable = !!origin &&
-    typeof origin.lat === "number" && isFinite(origin.lat) &&
-    typeof origin.lon === "number" && isFinite(origin.lon)
+  // is then NaN -- a comparator that answers "neither", which leaves rows in
+  // raw table order while the UI still labels them nearest-first. Degrading to
+  // the alphabetical branch is honest; a silently scrambled "nearest" list is
+  // not.
+  var usable = hasFiniteCoords(origin)
   var rows = []
   var i
   for (i = 0; i < table.length; i++) {
@@ -108,7 +118,12 @@ function search(stations, query, origin, limit) {
       borough: s.borough,
       line: s.line, complexId: s.complexId, lat: s.lat, lon: s.lon,
       labelN: s.labelN, labelS: s.labelS,
-      distanceKm: usable ? haversineKm(origin.lat, origin.lon, s.lat, s.lon) : null
+      // Both ends are checked, through the same helper. Guarding only the
+      // origin is what S8 was: a table row with a non-finite lat still
+      // reached haversineKm, and Model.distanceText rendered the NaN as the
+      // literal string "NaN mi".
+      distanceKm: usable && hasFiniteCoords(s)
+        ? haversineKm(origin.lat, origin.lon, s.lat, s.lon) : null
     })
   }
   rows.sort(function (a, b) {

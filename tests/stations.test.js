@@ -178,6 +178,50 @@ test("search survives a malformed origin instead of scrambling the order", () =>
     "and must fall back to the no-origin ordering exactly")
 })
 
+test("search survives a malformed station coordinate, not just a malformed origin", () => {
+  // S8. The F7 fix above guarded the ORIGIN only. A table row with a
+  // non-finite lat still reaches haversineKm, comes back with
+  // `distanceKm: NaN`, and Model.distanceText renders it as the literal
+  // string "NaN mi" -- distanceText guards null/undefined deliberately,
+  // because 0 km is a real answer, and has no reason to expect NaN.
+  const table = [
+    { id: "G1", name: "Alpha Good", routes: ["L"], lat: 40.70, lon: -73.95 },
+    { id: "B1", name: "Alpha Bad", routes: ["L"], lat: NaN, lon: -73.95 },
+    { id: "G2", name: "Alpha Far", routes: ["L"], lat: 40.90, lon: -73.95 }
+  ]
+  const rows = Stations.search(table, "Alpha", { lat: 40.71, lon: -73.95 }, 10)
+  const bad = rows.find((r) => r.id === "B1")
+  assert.ok(bad, "the row is still returned -- a bad coordinate is not a reason to hide a station")
+  assert.equal(bad.distanceKm, null,
+    "an unusable station coordinate must read as no distance, exactly as an unusable origin does")
+  rows.forEach((r) => {
+    assert.ok(r.distanceKm === null || isFinite(r.distanceKm),
+      r.id + " carries a non-finite distance")
+  })
+})
+
+test("one bad station coordinate does not disturb the order of the good ones", () => {
+  // The quieter half of S8. The comparator reaches
+  // `a.distanceKm - b.distanceKm` whenever the two differ -- and NaN differs
+  // from everything, itself included -- so it returns NaN, which sorts treat
+  // as 0. The bad row does not "sort first"; it pins wherever it started and
+  // silently stops the list being distance-ordered around it.
+  const good = [
+    { id: "G2", name: "Alpha Far", routes: ["L"], lat: 40.90, lon: -73.95 },
+    { id: "G1", name: "Alpha Near", routes: ["L"], lat: 40.70, lon: -73.95 }
+  ]
+  const withBad = [
+    good[0],
+    { id: "B1", name: "Alpha Bad", routes: ["L"], lat: NaN, lon: -73.95 },
+    good[1]
+  ]
+  const origin = { lat: 40.71, lon: -73.95 }
+  const order = Stations.search(withBad, "Alpha", origin, 10)
+    .filter((r) => r.id !== "B1").map((r) => r.id)
+  assert.deepEqual(order, Stations.search(good, "Alpha", origin, 10).map((r) => r.id),
+    "the good rows must keep their nearest-first order regardless of the bad one")
+})
+
 test("search's limit never cuts a complex in half", () => {
   // Deferred minor #2, confirmed by the final review at the live limit of 6.
   // Complex contiguity is the whole reason grouping exists; slicing through
