@@ -341,3 +341,57 @@ test("parseState treats a prototype-chain stopId as ordinary text", () => {
   const doc = { stations: [entry({ stopId: "__proto__" }), entry({ stopId: "constructor" })] }
   assert.deepEqual(parse(doc).stations.map((s) => s.stopId), ["__proto__", "constructor"])
 })
+
+// ---- what a hand-edited file can still get wrong (issue #7) -----------------
+//
+// Two shapes the validator let through entry-by-entry, because neither is
+// wrong about any single entry -- only about the list as a whole.
+
+test("parseState keeps the first of two entries sharing a stopId", () => {
+  // A duplicate is not a harmless extra row. setDirection and the add path
+  // both `break` on the first stopId match, while removeStation filters every
+  // copy -- so the second copy is a row you can delete but cannot edit, and
+  // toggling its direction silently edits the one above it.
+  const doc = { stations: [entry({ stopId: "a", direction: "N" }), entry({ stopId: "a", direction: "S" })] }
+  const out = parse(doc).stations
+  assert.equal(out.length, 1)
+  assert.equal(out[0].direction, "N", "the first wins, which is what both callers already assume")
+})
+
+test("parseState counts a duplicate against the station cap", () => {
+  // The cap bounds the WALK. 51 entries with one duplicate among the first 50
+  // is 50 examined and 49 kept -- the 51st is never reached, and does not get
+  // promoted into the freed slot.
+  const list = manyStations(51)
+  list[1].stopId = list[0].stopId
+  assert.equal(parse({ stations: list }).stations.length, 49)
+})
+
+test("parseState falls back to the first station when activeStationId names none", () => {
+  // Otherwise `saved` scans the list, finds nothing and returns null, so
+  // refresh() early-returns and the panel shows no active station while
+  // holding a full list. removeStation already falls back this way.
+  const doc = { stations: [entry({ stopId: "a" }), entry({ stopId: "b" })], activeStationId: "zzz" }
+  assert.equal(parse(doc).activeStationId, "a")
+})
+
+test("parseState falls back when activeStationId names a station that was rejected", () => {
+  const doc = { stations: [entry({ stopId: "a" }), entry({ stopId: "b", direction: "E" })], activeStationId: "b" }
+  assert.equal(parse(doc).activeStationId, "a")
+})
+
+test("parseState leaves activeStationId empty when no station loaded", () => {
+  assert.equal(parse({ stations: [], activeStationId: "a" }).activeStationId, "")
+  assert.equal(parse({ stations: [entry({ direction: "E" })], activeStationId: "635" }).activeStationId, "")
+})
+
+test("parseState dedupes a prototype-chain stopId as an ordinary one", () => {
+  // F14's write side. `seen["__proto__"] = true` hits the prototype setter and
+  // creates no own property at all, so an unprefixed key never recognises the
+  // second copy: every ordinary id dedupes and this one does not. Model.js
+  // prefixes its dedupe key for exactly this reason. The read side is the
+  // prototype-chain test above -- it passes just as happily when the write is
+  // broken, which is why both exist.
+  const dup = { stations: [entry({ stopId: "__proto__" }), entry({ stopId: "__proto__" })] }
+  assert.equal(parse(dup).stations.length, 1, "an identical __proto__ station must dedupe")
+})

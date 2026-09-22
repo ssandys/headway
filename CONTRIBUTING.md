@@ -164,6 +164,14 @@ breaking the one safety property it has — that an unrecognised alert type is
 never red. `ALERT_RED`, `ALERT_AMBER`, `ROUTE_COLORS` and the `Gtfs.js` feed
 map all guard this way.
 
+Reading is only half of it, and `hasOwnProperty` does not cover the other half.
+`seen["__proto__"] = true` hits the prototype setter and creates no own property
+at all, so the key is not recognised on the next read and its duplicate
+survives — every ordinary key dedupes and that one does not. A table that
+**records** upstream keys therefore prefixes them: `"t:" + key` in
+`Model.dedupeTrips`, `"id:" + stopId` in `State.parseState`. That makes every
+key an ordinary own property and the whole class goes away.
+
 ## How to run things
 
 ```bash

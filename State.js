@@ -151,12 +151,36 @@ function parseState(text, limits) {
       // number this file chooses rather than in one the file on disk chooses.
       var cap = raw.length < limits.stationLimit
         ? raw.length : limits.stationLimit
+      var seen = {}
       for (var i = 0; i < cap; i++) {
-        if (validStation(raw[i], limits.fieldLimit)) loaded.push(raw[i])
+        if (!validStation(raw[i], limits.fieldLimit)) continue
+        // A duplicate stopId is not a harmless extra row: setDirection and the
+        // add path both stop at the FIRST match while removeStation filters
+        // every copy, so a second copy is a row that can be deleted but not
+        // edited, and toggling its direction edits the one above it instead.
+        //
+        // The key is PREFIXED, as Model.dedupeTrips's is. hasOwnProperty alone
+        // guards only the read: `seen["__proto__"] = true` hits the prototype
+        // setter and creates no own property, so two __proto__ stations would
+        // never be recognised as duplicates. A prefix makes every key an
+        // ordinary own property and the whole class goes away.
+        var key = "id:" + raw[i].stopId
+        if (Object.prototype.hasOwnProperty.call(seen, key)) continue
+        seen[key] = true
+        loaded.push(raw[i])
       }
       if (typeof data.activeStationId === "string" &&
           data.activeStationId.length <= limits.fieldLimit) {
         active = data.activeStationId
+      }
+      // The active id must name a station that actually survived. Otherwise
+      // `saved` scans the list, finds nothing and returns null, refresh()
+      // early-returns on it, and the panel shows no active station while
+      // holding a full list of them -- which a hand-edited file, or an entry
+      // rejected above, is enough to produce. removeStation already falls back
+      // to the first remaining station; this is the same repair on load.
+      if (!Object.prototype.hasOwnProperty.call(seen, "id:" + active)) {
+        active = loaded.length ? loaded[0].stopId : ""
       }
     }
   } catch (e) {
