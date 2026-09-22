@@ -1,5 +1,5 @@
-// The saved-stations file, as argv: what Service.qml hands to Process to read
-// it and to write it.
+// The saved-stations file: the argv that reads and writes it, and what its
+// contents are allowed to be.
 //
 // Loaded by Service.qml (import "State.js" as State) AND by node --test, so it
 // carries the same engine constraints as Gtfs.js and Model.js: no I/O, no QML
@@ -7,11 +7,12 @@
 // Never introduce arrow functions, spread, template literals, let/const,
 // Object.assign, .includes( or .endsWith( in this file.
 //
-// It lives here, rather than as string literals inside Service.qml, because
-// this is the one place Headway touches a predictable path an attacker can
-// plant on -- and as literals it was the least tested code in the plugin
-// instead of the most. tests/state.test.js executes what these functions
-// return, against a symlink, a FIFO, an oversized file and a hostile payload.
+// It lives here, rather than inside Service.qml, because this is the one place
+// Headway touches a predictable path an attacker can plant on -- and in QML it
+// was the least tested code in the plugin instead of the most.
+// tests/state.test.js executes what the argv functions return, against a
+// symlink, a FIFO, an oversized file and a hostile payload, and drives the
+// parser with malformed, oversized and adversarial documents.
 
 // Reads the state file, or nothing at all.
 //
@@ -99,10 +100,78 @@ function writeErrorText(exitCode) {
   return "could not save the station list (exit " + exitCode + ")"
 }
 
+// What the file is ALLOWED TO CONTAIN. Entries are VALIDATED, not trusted.
+//
+// headway.json is plain JSON the README invites the user to inspect, so its
+// contents are upstream data. An entry without `routes` reaches
+// Model.alertsFor through the barState and tooltip property bindings, and a
+// throw in a binding removes the whole widget rather than one row.
+// Model.worstAlertClass guards this too; both halves are wanted, and this is
+// the half that keeps junk out of `refresh()` as well.
+//
+// The limit is a PARAMETER because no pure module may hold mutable state --
+// every QML component that imports this file gets its own instance of it, so
+// a limit injected once by Service.qml would be zero everywhere else. Same
+// reason Stations.byId takes its table per call.
+function validStation(e, fieldLimit) {
+  if (!e || typeof e.stopId !== "string" || e.stopId === "") return false
+  if (e.stopId.length > fieldLimit) return false
+  if (e.direction !== "N" && e.direction !== "S") return false
+  // An actual array test. `typeof e.routes.length === "number"` admits a
+  // string and {"length": 2}; neither throws downstream, but neither is a
+  // route list either. Works in both engines, unlike Array.isArray in ES3.
+  if (Object.prototype.toString.call(e.routes) !== "[object Array]") return false
+  if (e.routes.length === 0 || e.routes.length > fieldLimit) return false
+  for (var i = 0; i < e.routes.length; i++) {
+    if (typeof e.routes[i] !== "string") return false
+    if (e.routes[i].length > fieldLimit) return false
+  }
+  if (e.name !== undefined && typeof e.name !== "string") return false
+  return true
+}
+
+// Turns the file's TEXT into the two properties Service.qml holds, or into
+// empty ones. Never throws: the caller assigns the result straight into
+// property bindings, so a throw here would take the widget with it.
+//
+// Takes text, not a path -- everything that reaches here has already been
+// capped at byteLimit bytes by readArgs above. limits is
+// { byteLimit, stationLimit, fieldLimit }.
+function parseState(text, limits) {
+  var loaded = []
+  var active = ""
+  try {
+    // Belt as well as braces: readArgs bounds what arrives, and this bounds
+    // what is parsed if the reader is ever replaced by something that does not.
+    if (text && text.length <= limits.byteLimit) {
+      var data = JSON.parse(text)
+      var raw = data.stations || []
+      // The cap bounds the WALK, not the output: a file of 60 duplicates is
+      // 50 entries examined, not 50 kept. That is what makes this O(n) in a
+      // number this file chooses rather than in one the file on disk chooses.
+      var cap = raw.length < limits.stationLimit
+        ? raw.length : limits.stationLimit
+      for (var i = 0; i < cap; i++) {
+        if (validStation(raw[i], limits.fieldLimit)) loaded.push(raw[i])
+      }
+      if (typeof data.activeStationId === "string" &&
+          data.activeStationId.length <= limits.fieldLimit) {
+        active = data.activeStationId
+      }
+    }
+  } catch (e) {
+    loaded = []
+    active = ""
+  }
+  return { stations: loaded, activeStationId: active }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readArgs: readArgs,
     writeArgs: writeArgs,
-    writeErrorText: writeErrorText
+    writeErrorText: writeErrorText,
+    validStation: validStation,
+    parseState: parseState
   }
 }

@@ -12,7 +12,7 @@ happened on this branch, not advice.
 | `StationData.js` | 496 generated station records. Do not hand-edit | same |
 | `Model.js` | Arrival assembly, alert classification, bar state, all display formatting | same |
 | `Fetch.js` | The curl argv, the error text a curl exit code becomes, and how long to wait after a failed poll | same |
-| `State.js` | The argv that reads and writes the saved-stations file, and what a failed write cost the user | same |
+| `State.js` | The saved-stations file: the argv that reads and writes it, what its contents are allowed to be (`validStation`, `parseState`), and what a failed write cost the user | same |
 | `Service.qml` | I/O only: `curl` polling, shell-mediated state file, `notify-send` | **The live shell only** |
 | `Panel.qml` | Rendering only: the bar button, its badge, the panel | **The live shell only** |
 | `RouteBullet.qml` | One MTA route bullet — disc for local, diamond for express | **The live shell only** |

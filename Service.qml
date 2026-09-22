@@ -209,57 +209,22 @@ Item {
 
   property bool stateResolved: false
 
-  // Entries are VALIDATED, not trusted. headway.json is plain JSON the README
-  // invites the user to inspect, so its contents are upstream data. An entry
-  // without `routes` reaches Model.alertsFor through the barState and tooltip
-  // property bindings, and a throw in a binding removes the whole widget rather
-  // than one row. Model.worstAlertClass guards this too; both halves are wanted,
-  // and this is the half that keeps junk out of `refresh()` as well.
-  function validStation(e) {
-    if (!e || typeof e.stopId !== "string" || e.stopId === "") return false
-    if (e.stopId.length > root.stateFieldLimit) return false
-    if (e.direction !== "N" && e.direction !== "S") return false
-    // An actual array test. `typeof e.routes.length === "number"` admits a
-    // string and {"length": 2}; neither throws downstream, but neither is a
-    // route list either. Works in both engines, unlike Array.isArray in ES3.
-    if (Object.prototype.toString.call(e.routes) !== "[object Array]") return false
-    if (e.routes.length === 0 || e.routes.length > root.stateFieldLimit) return false
-    for (var i = 0; i < e.routes.length; i++) {
-      if (typeof e.routes[i] !== "string") return false
-      if (e.routes[i].length > root.stateFieldLimit) return false
-    }
-    if (e.name !== undefined && typeof e.name !== "string") return false
-    return true
-  }
-
+  // The contents are VALIDATED, not trusted, and the validation lives in
+  // State.js -- pure logic with no I/O has no business in the one file
+  // node --test cannot load. tests/state.test.js drives it with malformed,
+  // oversized and adversarial documents.
+  //
   // Takes TEXT, not a FileView. Everything that reaches here has already been
   // capped at stateByteLimit bytes by a non-symlink regular file.
   function consumeState(text) {
     root.stateResolved = true
-    var loaded = []
-    var active = ""
-    try {
-      // Belt as well as braces: head bounds what arrives, and this bounds what
-      // is parsed if the reader is ever replaced by something that does not.
-      if (text && text.length <= root.stateByteLimit) {
-        var data = JSON.parse(text)
-        var raw = data.stations || []
-        var cap = raw.length < root.stateStationLimit
-          ? raw.length : root.stateStationLimit
-        for (var i = 0; i < cap; i++) {
-          if (root.validStation(raw[i])) loaded.push(raw[i])
-        }
-        if (typeof data.activeStationId === "string" &&
-            data.activeStationId.length <= root.stateFieldLimit) {
-          active = data.activeStationId
-        }
-      }
-    } catch (e) {
-      loaded = []
-      active = ""
-    }
-    root.stations = loaded
-    root.activeStationId = active
+    var parsed = State.parseState(text, {
+      byteLimit: root.stateByteLimit,
+      stationLimit: root.stateStationLimit,
+      fieldLimit: root.stateFieldLimit
+    })
+    root.stations = parsed.stations
+    root.activeStationId = parsed.activeStationId
     // REQUIRED. The poll Timer has triggeredOnStart, so refresh() runs once at
     // component completion -- but the state read is asynchronous and finishes
     // AFTER that, so the first refresh sees no saved station and early-returns.

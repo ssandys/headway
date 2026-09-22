@@ -197,3 +197,147 @@ test("writeErrorText says what was lost, not just that something failed", () => 
     assert.match(State.writeErrorText(code), /save|saved|station/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Parsing the file's contents (issue #7)
+//
+// validStation and parseState are what bound headway.json -- the 50-station
+// cap, the per-field type and length checks, the rejection of malformed
+// entries. They lived in Service.qml, which node --test cannot load, so the
+// most security-sensitive validation in the plugin was the only validation
+// with no coverage. The same thing was true of readArgs and writeArgs above,
+// and two review rounds walked past real bugs in them while it was.
+//
+// A miss here is louder than a bad row: an entry without `routes` reaches
+// Model.alertsFor through a property binding, and a throw in a QML binding
+// removes the whole widget rather than one row.
+
+const LIMITS = { byteLimit: CAP, stationLimit: 50, fieldLimit: 64 }
+
+// A station parseState accepts, so each test varies one field and asserts on
+// that field alone.
+function entry(over) {
+  return Object.assign(
+    { stopId: "635", direction: "N", routes: ["4", "5", "6"], name: "51 St" },
+    over
+  )
+}
+
+function parse(doc, limits) {
+  const text = typeof doc === "string" ? doc : JSON.stringify(doc)
+  return State.parseState(text, limits || LIMITS)
+}
+
+// Every rejection case is the same shape: one field made bad, nothing loaded.
+function rejects(over, why) {
+  assert.deepEqual(parse({ version: 1, stations: [entry(over)] }).stations, [], why)
+}
+
+function manyStations(n) {
+  const out = []
+  for (let i = 0; i < n; i++) out.push(entry({ stopId: "s" + i }))
+  return out
+}
+
+test("parseState returns nothing for the empty read of a first run", () => {
+  assert.deepEqual(parse(""), { stations: [], activeStationId: "" })
+})
+
+test("parseState survives malformed JSON without throwing", () => {
+  // Service.qml has no try/catch around this call any more, so a throw here
+  // would reach a QML binding and take the widget with it.
+  assert.deepEqual(parse("{not json"), { stations: [], activeStationId: "" })
+})
+
+test("parseState yields nothing when stations is not a list", () => {
+  assert.deepEqual(parse({ stations: "635" }).stations, [])
+  assert.deepEqual(parse({ stations: 7 }).stations, [])
+  assert.deepEqual(parse({}).stations, [])
+})
+
+test("parseState ignores text larger than the byte cap", () => {
+  // Belt as well as braces: readArgs bounds what arrives, this bounds what is
+  // parsed if the reader is ever replaced by something that does not.
+  const doc = JSON.stringify({ stations: [entry()] })
+  assert.equal(parse(doc, { ...LIMITS, byteLimit: doc.length - 1 }).stations.length, 0)
+  assert.equal(parse(doc, { ...LIMITS, byteLimit: doc.length }).stations.length, 1)
+})
+
+test("parseState loads a well-formed station unchanged", () => {
+  const e = entry()
+  assert.deepEqual(parse({ version: 1, stations: [e] }).stations, [e])
+})
+
+test("parseState keeps at most stationLimit stations", () => {
+  assert.equal(parse({ stations: manyStations(49) }).stations.length, 49)
+  assert.equal(parse({ stations: manyStations(50) }).stations.length, 50)
+  assert.equal(parse({ stations: manyStations(51) }).stations.length, 50)
+})
+
+test("parseState rejects a stopId that is missing, empty or not a string", () => {
+  rejects({ stopId: undefined }, "a missing stopId names no station")
+  rejects({ stopId: "" }, "an empty stopId names no station")
+  rejects({ stopId: 635 }, "a number would compare unequal to every saved id")
+  rejects({ stopId: ["635"] }, "an array is not an id")
+  assert.deepEqual(parse({ stations: [null] }).stations, [], "an entry may be null")
+})
+
+test("parseState bounds stopId at fieldLimit", () => {
+  assert.equal(parse({ stations: [entry({ stopId: "x".repeat(63) })] }).stations.length, 1)
+  assert.equal(parse({ stations: [entry({ stopId: "x".repeat(64) })] }).stations.length, 1)
+  assert.equal(parse({ stations: [entry({ stopId: "x".repeat(65) })] }).stations.length, 0)
+})
+
+test("parseState rejects a direction the subway does not have", () => {
+  rejects({ direction: "E" }, "only N and S exist in this feed")
+  rejects({ direction: "n" }, "the comparison is case-sensitive on purpose")
+  rejects({ direction: "" }, "an empty direction picks no platform")
+  rejects({ direction: undefined }, "direction is required, not optional")
+})
+
+test("parseState rejects anything that merely looks like a routes array", () => {
+  // S7. `typeof e.routes.length === "number"` admitted both of these, and
+  // neither throws downstream -- but neither is a route list either. Shipped
+  // fixed at v0.1.1 and never pinned until now.
+  rejects({ routes: "456" }, "a string has a numeric length and indexes")
+  rejects({ routes: { length: 2 } }, "so does a hand-made object")
+})
+
+test("parseState rejects an empty or oversized routes list", () => {
+  rejects({ routes: [] }, "a station serving no route has nothing to show")
+  assert.equal(parse({ stations: [entry({ routes: Array(64).fill("4") })] }).stations.length, 1)
+  assert.equal(parse({ stations: [entry({ routes: Array(65).fill("4") })] }).stations.length, 0)
+})
+
+test("parseState rejects a route that is not a bounded string", () => {
+  rejects({ routes: ["4", 5] }, "a numeric route id would miss every route table")
+  rejects({ routes: ["x".repeat(65)] }, "a route id is bounded like every other field")
+})
+
+test("parseState allows name to be absent but not to be the wrong type", () => {
+  assert.equal(parse({ stations: [entry({ name: undefined })] }).stations.length, 1)
+  rejects({ name: 51 }, "name reaches a QML Text element")
+})
+
+test("parseState drops only the invalid entry, keeping its valid neighbours", () => {
+  const doc = { stations: [entry({ stopId: "a" }), entry({ stopId: "b", direction: "E" }), entry({ stopId: "c" })] }
+  assert.deepEqual(parse(doc).stations.map((s) => s.stopId), ["a", "c"])
+})
+
+test("parseState rejects an activeStationId that is not a bounded string", () => {
+  assert.equal(parse({ stations: [], activeStationId: 635 }).activeStationId, "")
+  assert.equal(parse({ stations: [], activeStationId: "x".repeat(65) }).activeStationId, "")
+})
+
+test("parseState keeps an activeStationId that names a loaded station", () => {
+  const doc = { stations: [entry({ stopId: "a" }), entry({ stopId: "b" })], activeStationId: "b" }
+  assert.equal(parse(doc).activeStationId, "b")
+})
+
+test("parseState treats a prototype-chain stopId as ordinary text", () => {
+  // Defensive. Nothing in Service.qml or Stations.byId indexes an object by
+  // stopId -- both are linear scans -- so this is not the live bug it is in
+  // Model.js and Stations.js. It is pinned so that stops being true loudly.
+  const doc = { stations: [entry({ stopId: "__proto__" }), entry({ stopId: "constructor" })] }
+  assert.deepEqual(parse(doc).stations.map((s) => s.stopId), ["__proto__", "constructor"])
+})
