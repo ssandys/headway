@@ -246,6 +246,51 @@ function alertTextWithIcons(text) {
   return out
 }
 
+// The feed writes route ids in that same bracket syntax, and they are the
+// larger half: 1382 occurrences in the fixture against 242 icon ones. 1363 of
+// them have a circled Unicode form. The 19 that do not -- [SIR] x10, [6X] x5,
+// [7X] x4 -- stay bracketed rather than being handed an invented glyph.
+//
+// Arithmetic rather than 35 literal table entries: both Unicode blocks are
+// contiguous, U+2460 for the digits and U+24B6 for the letters, so the mapping
+// is an offset with nothing to keep in sync by hand.
+//
+// Monochrome, unlike the RouteBullet at the head of the row -- the accepted
+// cost, recorded on issue #6. Bracketed text did not match the bullet either,
+// and a circled glyph at least reads as a route rather than as punctuation.
+//
+// No pad here, unlike ALERT_ICONS. These arrive from a different fallback font
+// (Noto Sans CJK on this machine, not a Nerd Font), so the ink overflow
+// measured there may not happen here, and a pad added blind would show as a
+// double gap. If they do eat the following space, that is a one-line change.
+var ROUTE_ID_CHARS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+function routeGlyphOf(id) {
+  if (id >= "1" && id <= "9") {
+    return String.fromCodePoint(0x2460 + (id.charCodeAt(0) - 49))
+  }
+  return String.fromCodePoint(0x24B6 + (id.charCodeAt(0) - 65))
+}
+
+function alertTextWithRouteGlyphs(text) {
+  if (!text || typeof text !== "string") return ""
+  var out = text
+  for (var i = 0; i < ROUTE_ID_CHARS.length; i++) {
+    var id = ROUTE_ID_CHARS.charAt(i)
+    var token = "[" + id + "]"
+    if (out.indexOf(token) < 0) continue
+    out = out.split(token).join(routeGlyphOf(id))
+  }
+  return out
+}
+
+// Everything a rider should see instead of the feed's own markup. The two
+// halves are independent -- an icon token holds no bracketed single character,
+// and neither substitution produces a bracket -- so the order is arbitrary.
+function alertDisplayText(text) {
+  return alertTextWithRouteGlyphs(alertTextWithIcons(text))
+}
+
 // alertsFor, plus the route each alert belongs to, ordered by the rider's own
 // route order rather than the feed's.
 //
@@ -269,8 +314,8 @@ function alertsForDisplay(routes, alerts, nowSec) {
       id: a.id, alertType: a.alertType,
       // Named by hand because this is a FRESH object: a field left out here
       // never reaches Panel.qml however well Gtfs.js decoded it.
-      headerText: alertTextWithIcons(a.headerText),
-      descriptionText: alertTextWithIcons(a.descriptionText),
+      headerText: alertDisplayText(a.headerText),
+      descriptionText: alertDisplayText(a.descriptionText),
       routes: a.routes, periods: a.periods,
       matchedRoute: matchedRouteOf(mine, a)
     })
@@ -536,7 +581,7 @@ function tooltipText(snapshot, nowSec) {
       // Iconised for the same reason the panel's copy is: one string must not
       // read as a glyph in one surface and as literal words in the other.
       return head + " - " +
-             (alertTextWithIcons(live[i].headerText) || live[i].alertType)
+             (alertDisplayText(live[i].headerText) || live[i].alertType)
     }
   }
   var arrivals = snapshot.arrivals || []
@@ -574,6 +619,8 @@ if (typeof module !== "undefined") {
     directionLabelOf: directionLabelOf,
     barState: barState,
     tooltipText: tooltipText,
-    alertTextWithIcons: alertTextWithIcons
+    alertTextWithIcons: alertTextWithIcons,
+    alertTextWithRouteGlyphs: alertTextWithRouteGlyphs,
+    alertDisplayText: alertDisplayText
   }
 }

@@ -610,11 +610,14 @@ test("alertsForDisplay carries the alert's description through to the panel", ()
   // reaches Panel.qml however well Gtfs.js decoded it.
   const alerts = [
     { id: "a", alertType: "Delays", routes: ["6"], periods: [], headerText: "six",
-      descriptionText: "Take the [4] instead between 125 St and Grand Central." }
+      // Deliberately free of bracketed tokens: this test is about the field
+      // being carried onto a fresh object, not about what is substituted into
+      // it. The substitutions have their own tests below.
+      descriptionText: "Use the Lexington Av line between 125 St and Grand Central." }
   ]
   const out = Model.alertsForDisplay(["6"], alerts, 1000)
   assert.equal(out[0].descriptionText,
-    "Take the [4] instead between 125 St and Grand Central.")
+    "Use the Lexington Av line between 125 St and Grand Central.")
 })
 
 // ---------------------------------------------------------------------------
@@ -734,4 +737,89 @@ test("alertTextWithIcons pads the glyph, because the font paints over the space"
   // rule, no special case, and a trailing space is invisible anyway.
   assert.equal(Model.alertTextWithIcons("ends with [airplane icon]"),
     "ends with " + ICON_PLANE + " ")
+})
+
+// ---------------------------------------------------------------------------
+// Route ids in alert text (issue #6)
+//
+// The feed writes route ids in the same bracket syntax as the icons, and they
+// are the larger half: 1382 occurrences in the fixture against 242 icon ones.
+// 1363 of those have a circled Unicode form; the 19 that do not are [SIR] x10,
+// [6X] x5 and [7X] x4, which stay bracketed.
+//
+// Monochrome, unlike the coloured RouteBullet at the head of the row. That is
+// the accepted cost: bracketed text does not match the bullet either, and a
+// circled glyph at least reads as a route rather than as punctuation.
+//
+// No pad here, unlike the Nerd Font icons. These arrive from a different
+// fallback font and may well have honest metrics; padding blind would show as
+// a double gap. If they turn out to eat the following space too, that is a
+// one-line change and this comment is why it was not made up front.
+const CIRCLED_6 = String.fromCodePoint(0x2465)
+const CIRCLED_1 = String.fromCodePoint(0x2460)
+const CIRCLED_A = String.fromCodePoint(0x24B6)
+const CIRCLED_Z = String.fromCodePoint(0x24CF)
+
+test("alertTextWithRouteGlyphs draws single-character route ids as circled glyphs", () => {
+  assert.equal(Model.alertTextWithRouteGlyphs("[6] runs in two sections"),
+    CIRCLED_6 + " runs in two sections")
+  assert.equal(Model.alertTextWithRouteGlyphs("take the [1]"), "take the " + CIRCLED_1)
+  assert.equal(Model.alertTextWithRouteGlyphs("[A] is rerouted"), CIRCLED_A + " is rerouted")
+  assert.equal(Model.alertTextWithRouteGlyphs("[Z] skips"), CIRCLED_Z + " skips")
+})
+
+test("alertTextWithRouteGlyphs leaves the ids with no circled form bracketed", () => {
+  // [SIR], [6X] and [7X] -- 19 occurrences in the fixture between them. A
+  // partial substitution is correct here: the alternative is inventing a glyph.
+  ;["[6X]", "[7X]", "[SIR]", "[FS]", "[GS]"].forEach(function (id) {
+    assert.equal(Model.alertTextWithRouteGlyphs("the " + id + " train"),
+      "the " + id + " train", id)
+  })
+})
+
+test("alertTextWithRouteGlyphs replaces every occurrence of an id", () => {
+  const out = Model.alertTextWithRouteGlyphs("[6] and [6] and [6]")
+  assert.equal(out, CIRCLED_6 + " and " + CIRCLED_6 + " and " + CIRCLED_6)
+})
+
+test("alertTextWithRouteGlyphs leaves anything that is not a bare id alone", () => {
+  ;["[constructor]", "[__proto__]", "[]", "[accessibility icon]", "[6 ]", "6"]
+    .forEach(function (kept) {
+      assert.equal(Model.alertTextWithRouteGlyphs("x " + kept + " y"), "x " + kept + " y", kept)
+    })
+})
+
+test("alertTextWithRouteGlyphs never lengthens the string", () => {
+  const text = "[6] [A] [1] ".repeat(50)
+  assert.ok(Model.alertTextWithRouteGlyphs(text).length < text.length)
+})
+
+test("alertTextWithRouteGlyphs survives an absent string", () => {
+  assert.equal(Model.alertTextWithRouteGlyphs(""), "")
+  assert.equal(Model.alertTextWithRouteGlyphs(undefined), "")
+  assert.equal(Model.alertTextWithRouteGlyphs(null), "")
+})
+
+test("alertsForDisplay applies icons AND route glyphs, in one pass", () => {
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "No [6] between Hunts Point Av and 125 St",
+    descriptionText: "Transfer between [6] and [shuttle bus icon] at Hunts Point Av" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)
+  assert.equal(out[0].headerText, "No " + CIRCLED_6 + " between Hunts Point Av and 125 St")
+  assert.equal(out[0].descriptionText,
+    "Transfer between " + CIRCLED_6 + " and " + ICON_BUS + "  at Hunts Point Av")
+})
+
+test("no single-character route id survives into display text, across the fixture", () => {
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  const leftover = new Set()
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      const shown = Model.alertTextWithRouteGlyphs(Model.alertTextWithIcons(s))
+      for (const m of shown.matchAll(/\[([A-Z0-9])\]/g)) leftover.add(m[1])
+    }
+  }
+  assert.deepEqual([...leftover], [], "a bare route id still reaching the panel as text")
 })
