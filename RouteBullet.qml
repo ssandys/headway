@@ -56,10 +56,15 @@ Item {
     color: Model.routeTextColor(root.routeId)
     font.family: root.fontFamily
     font.bold: true
-    // 0.62 of the disc, not of the inscribed square: the label stays the same
-    // size whether the train is local or express, which is what keeps a mixed
+    // Sized off the DISC, not the inscribed square, so the label stays the
+    // same whether the train is local or express -- that is what keeps a mixed
     // column of bullets looking like one set.
-    font.pixelSize: root.diameter * 0.62
+    //
+    // The arithmetic lives in Model.js rather than as a literal here, like the
+    // colours above it, so the multi-character case is unit-tested: "SIR" at
+    // the old flat 0.62 overflowed the disc. One character is unchanged.
+    font.pixelSize: Model.bulletLabelSize(root.diameter,
+                                          Model.normalizeRoute(root.routeId))
     // The smallest text this widget draws, where hinting matters most -- the
     // same reason WidgetButton's own label uses it.
     renderType: Text.NativeRendering

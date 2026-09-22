@@ -187,6 +187,184 @@ function matchedRouteOf(routes, alert) {
   return ""
 }
 
+// The feed writes icons as bracketed words -- "[shuttle bus icon] Free T102
+// shuttle buses make all stops" -- and they reached the panel as literal text.
+//
+// Measured over the committed fixture and the live feed: three tokens and only
+// three, [accessibility icon] (165/180 occurrences), [shuttle bus icon] (74/61)
+// and [airplane icon] (3/1). Small enough to map by hand rather than parse.
+//
+// Nerd Font glyphs rather than Unicode, because there is no non-emoji bus
+// character at all: the codepoints below sit in the same 140-font set that
+// supplies BAR_GLYPH, which this widget already renders. Built with
+// fromCodePoint, never typed, for exactly the reason BAR_GLYPH is -- a literal
+// private-use character does not survive every editing path, and the failure
+// here would be an invisible tofu box with nothing logged.
+//
+// Route ids in the same bracket syntax ([4], [6X]) are deliberately NOT
+// substituted. They outnumber the icons five to one, and the circled forms
+// lose the colour and the express diamond that make an MTA bullet readable --
+// see issue #6, where that is a separate decision.
+//
+// This runs on the way to the PANEL and the TOOLTIP, both of which render in
+// the bar's own font stack. The desktop notification in Service.qml keeps the
+// placeholder words: notify-send hands the text to a notification daemon whose
+// font is not ours to choose, and a tofu box there is worse than the words.
+var ALERT_ICONS = {
+  "[accessibility icon]": String.fromCodePoint(0xF193),
+  "[shuttle bus icon]": String.fromCodePoint(0xF207),
+  "[airplane icon]": String.fromCodePoint(0xF072)
+}
+
+// A space the ink eats. MEASURED: after substitution the string really is
+// U+F207, U+0020, "F", "r", "e", "e" -- the feed's own space is there and
+// correct -- and the panel still drew "<bus>Free". The glyph arrives from
+// JetBrainsMono Nerd Font by fontconfig fallback while the body text is iA
+// Writer Mono S, and the icon's ink is wider than the advance it is given, so
+// it paints straight over the space that follows. This is the one it absorbs.
+//
+// Tuned to a font pairing, which makes it the first thing to revisit if these
+// ever look doubly spaced rather than tightly. It is this line, not the feed.
+var ICON_PAD = " "
+
+// Substitution only ever SHORTENS -- twenty characters become two -- so the
+// 2000-character cap Gtfs.js applies at decode still holds afterwards and
+// nothing downstream needs to re-bound anything.
+//
+// split/join rather than a regex: `[` and `]` are regex metacharacters, and a
+// hand-escaped pattern is a bug waiting to be introduced for no gain at all.
+function alertTextWithIcons(text) {
+  if (!text || typeof text !== "string") return ""
+  var out = text
+  for (var token in ALERT_ICONS) {
+    // A bare for-in walks the prototype chain, so an inherited member would be
+    // read as one more token to substitute.
+    if (!Object.prototype.hasOwnProperty.call(ALERT_ICONS, token)) continue
+    if (out.indexOf(token) < 0) continue
+    out = out.split(token).join(ALERT_ICONS[token] + ICON_PAD)
+  }
+  return out
+}
+
+// The feed writes route ids in that same bracket syntax, and they are the
+// larger half: 1382 occurrences in the fixture against 242 icon ones. 1363 of
+// them have a circled Unicode form. The 19 that do not -- [SIR] x10, [6X] x5,
+// [7X] x4 -- stay bracketed rather than being handed an invented glyph.
+//
+// Arithmetic rather than 35 literal table entries: both Unicode blocks are
+// contiguous, U+2460 for the digits and U+24B6 for the letters, so the mapping
+// is an offset with nothing to keep in sync by hand.
+//
+// Monochrome, unlike the RouteBullet at the head of the row -- the accepted
+// cost, recorded on issue #6. Bracketed text did not match the bullet either,
+// and a circled glyph at least reads as a route rather than as punctuation.
+//
+// No pad here, unlike ALERT_ICONS. These arrive from a different fallback font
+// (Noto Sans CJK on this machine, not a Nerd Font), so the ink overflow
+// measured there may not happen here, and a pad added blind would show as a
+// double gap. If they do eat the following space, that is a one-line change.
+var ROUTE_ID_CHARS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+function routeGlyphOf(id) {
+  if (id >= "1" && id <= "9") {
+    return String.fromCodePoint(0x2460 + (id.charCodeAt(0) - 49))
+  }
+  return String.fromCodePoint(0x24B6 + (id.charCodeAt(0) - 65))
+}
+
+function alertTextWithRouteGlyphs(text) {
+  if (!text || typeof text !== "string") return ""
+  var out = text
+  for (var i = 0; i < ROUTE_ID_CHARS.length; i++) {
+    var id = ROUTE_ID_CHARS.charAt(i)
+    var token = "[" + id + "]"
+    if (out.indexOf(token) < 0) continue
+    out = out.split(token).join(routeGlyphOf(id))
+  }
+  return out
+}
+
+// Everything a rider should see instead of the feed's own markup. The two
+// halves are independent -- an icon token holds no bracketed single character,
+// and neither substitution produces a bracket -- so the order is arbitrary.
+function alertDisplayText(text) {
+  return alertTextWithRouteGlyphs(alertTextWithIcons(text))
+}
+
+// One alert string as lines of word-level runs, for a Flow to lay out.
+//
+// Word-level because a Text inside a Flow needs an explicit width to wrap, and
+// wrapMode does not constrain one -- so the Flow has to do the wrapping, which
+// means it needs items to wrap. The 2000-character cap applied at decode bounds
+// this at roughly 330 runs for the longest alert the feed can produce.
+//
+// `sp` rides on the run rather than coming from Flow.spacing, which is uniform:
+// with uniform spacing "[SIR]," renders as "SIR , see below". Punctuation is
+// split off the id and marked sp:false so it hugs the bullet it belongs to.
+//
+// A route run carries the FEED's id -- "6X", not "6". RouteBullet normalizes
+// for the label and picks disc or diamond, exactly as it does at the row head.
+var ROUTE_TRAIL = ",.:;)?!"
+// NOT "[". Stripping the opening bracket as leading punctuation would leave
+// "6]", which is not a bracketed id, so every route in the feed would come back
+// out as plain text having looked like the tokenizer worked.
+var ROUTE_LEAD = "(\"'"
+
+// "[6]" -> "6", "[SIR]" -> "SIR", anything else -> "". One to three characters
+// of A-Z or 0-9 between brackets, and nothing else.
+function bracketedRouteId(word) {
+  if (word.length < 3 || word.charAt(0) !== "[") return ""
+  if (word.charAt(word.length - 1) !== "]") return ""
+  var id = word.substring(1, word.length - 1)
+  if (id.length < 1 || id.length > 3) return ""
+  for (var i = 0; i < id.length; i++) {
+    var c = id.charAt(i)
+    if (!((c >= "A" && c <= "Z") || (c >= "0" && c <= "9"))) return ""
+  }
+  return id
+}
+
+// Splits one space-delimited word into runs. `sp` applies to the first of them;
+// everything after it hugs what precedes it.
+function wordRuns(word, sp, out) {
+  var lead = ""
+  while (word.length > 0 && ROUTE_LEAD.indexOf(word.charAt(0)) >= 0) {
+    lead = lead + word.charAt(0)
+    word = word.substring(1)
+  }
+  var trail = ""
+  while (word.length > 0 && ROUTE_TRAIL.indexOf(word.charAt(word.length - 1)) >= 0) {
+    trail = word.charAt(word.length - 1) + trail
+    word = word.substring(0, word.length - 1)
+  }
+  var id = bracketedRouteId(word)
+  if (id === "") {
+    // Not a route after all, so that punctuation was never punctuation --
+    // put the word back together and emit it whole.
+    out.push({ t: "s", v: lead + word + trail, sp: sp })
+    return
+  }
+  if (lead !== "") out.push({ t: "s", v: lead, sp: sp })
+  out.push({ t: "r", v: id, sp: lead === "" ? sp : false })
+  if (trail !== "") out.push({ t: "s", v: trail, sp: false })
+}
+
+function alertRuns(text) {
+  if (!text || typeof text !== "string") return []
+  var lines = alertTextWithIcons(text).split("\n")
+  var out = []
+  for (var i = 0; i < lines.length; i++) {
+    var words = lines[i].split(" ")
+    var runs = []
+    for (var j = 0; j < words.length; j++) {
+      if (words[j] === "") continue
+      wordRuns(words[j], runs.length > 0, runs)
+    }
+    out.push(runs)
+  }
+  return out
+}
+
 // alertsFor, plus the route each alert belongs to, ordered by the rider's own
 // route order rather than the feed's.
 //
@@ -207,7 +385,18 @@ function alertsForDisplay(routes, alerts, nowSec) {
   for (var i = 0; i < live.length; i++) {
     var a = live[i]
     out.push({
-      id: a.id, alertType: a.alertType, headerText: a.headerText,
+      id: a.id, alertType: a.alertType,
+      // Named by hand because this is a FRESH object: a field left out here
+      // never reaches Panel.qml however well Gtfs.js decoded it.
+      headerText: alertDisplayText(a.headerText),
+      descriptionText: alertDisplayText(a.descriptionText),
+      // ADDITIVE. The strings above are untouched and still fully substituted;
+      // these are what Panel.qml lays out as a Flow of words and bullets.
+      // Keeping both means the runs can be reverted without anything
+      // downstream changing with them, and it keeps one string from having
+      // three variants in circulation.
+      headerRuns: alertRuns(a.headerText),
+      descriptionRuns: alertRuns(a.descriptionText),
       routes: a.routes, periods: a.periods,
       matchedRoute: matchedRouteOf(mine, a)
     })
@@ -270,6 +459,26 @@ var ROUTE_COLORS = {
 // a letter floating in it, which reads as a rendering bug rather than as an
 // unrecognised route.
 var ROUTE_COLOR_FALLBACK = "#6E7681"
+
+// The label's pixel size for a bullet of this diameter.
+//
+// Lives here rather than in RouteBullet.qml for the reason the colours do:
+// colour and text colour both come from this file so they are unit-tested
+// rather than hand-picked per call site. The size is the same kind of
+// decision, and it is the only way the SIR case gets a test at all.
+//
+// 0.62 is what every bullet has always used and what every one-character
+// bullet keeps. The second term is the fit: 0.6 is a monospace glyph's advance
+// as a fraction of its pixel size, and 0.8 * diameter is the usable chord
+// across a disc, so `label.length` glyphs fit within it. SIR lands at
+// 0.44 * diameter; one or two characters are unchanged, because the cap wins.
+function bulletLabelSize(diameter, label) {
+  var len = label ? label.length : 1
+  if (len < 1) len = 1
+  var fitted = (diameter * 0.8) / (0.6 * len)
+  var capped = diameter * 0.62
+  return fitted < capped ? fitted : capped
+}
 
 function routeColor(id) {
   // normalizeRoute first, so 6X resolves to the 6's green rather than falling
@@ -470,7 +679,10 @@ function tooltipText(snapshot, nowSec) {
   for (var i = 0; i < live.length; i++) {
     var cls = classifyAlert(live[i].alertType)
     if (cls === "red" || cls === "amber") {
-      return head + " - " + (live[i].headerText || live[i].alertType)
+      // Iconised for the same reason the panel's copy is: one string must not
+      // read as a glyph in one surface and as literal words in the other.
+      return head + " - " +
+             (alertDisplayText(live[i].headerText) || live[i].alertType)
     }
   }
   var arrivals = snapshot.arrivals || []
@@ -496,6 +708,7 @@ if (typeof module !== "undefined") {
     COLOR_ERROR: COLOR_ERROR,
     ROUTE_COLOR_FALLBACK: ROUTE_COLOR_FALLBACK,
     routeColor: routeColor,
+    bulletLabelSize: bulletLabelSize,
     routeTextColor: routeTextColor,
     formatCountdown: formatCountdown,
     badgeText: badgeText,
@@ -507,6 +720,10 @@ if (typeof module !== "undefined") {
     alertsForDisplay: alertsForDisplay,
     directionLabelOf: directionLabelOf,
     barState: barState,
-    tooltipText: tooltipText
+    tooltipText: tooltipText,
+    alertTextWithIcons: alertTextWithIcons,
+    alertTextWithRouteGlyphs: alertTextWithRouteGlyphs,
+    alertDisplayText: alertDisplayText,
+    alertRuns: alertRuns
   }
 }

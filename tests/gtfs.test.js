@@ -351,3 +351,145 @@ test("walkFields rejects an unterminated group rather than running off the end",
   assert.throws(() => Gtfs.walkFields(u8(0x13, 0x18, 0x07), 0, 3, () => {}),
     /group/)
 })
+
+// ---------------------------------------------------------------------------
+// Alert descriptions (issue #6)
+//
+// header_text is the headline -- often just "Delays" or "Service change". The
+// detail is in description_text, which the decoder walked straight past.
+//
+// Measured over the committed fixture before any of this was written: 194 of
+// the 195 alerts carry a description, median 338 characters, longest 1398, and
+// 192 of them contain newlines. Every header AND every description ships
+// exactly two translations, `en` followed by `en-html`, and the en-html one is
+// real markup: `<p>For service to these stations, take the [1] to <strong>96
+// St</strong>...`. The decoder took translation 0 and never read `language`,
+// so it was right by ordering alone.
+
+// A minimal protobuf writer. The fixture cannot express an en-html-first
+// ordering or a 2000-character description, and hand-typing nested length
+// prefixes for a TranslatedString is how a test ends up asserting its own
+// arithmetic instead of the decoder.
+function pbVarint(n) {
+  const out = []
+  while (n > 0x7f) {
+    out.push((n & 0x7f) | 0x80)
+    n = Math.floor(n / 128)
+  }
+  out.push(n)
+  return out
+}
+function pbLen(field, payload) {
+  return [...pbVarint(field * 8 + 2), ...pbVarint(payload.length), ...payload]
+}
+function pbStr(s) {
+  return [...Buffer.from(s, "utf8")]
+}
+// TranslatedString.translation = 1; Translation.text = 1, language = 2.
+function pbTranslated(translations) {
+  return translations.flatMap((t) =>
+    pbLen(1, [...pbLen(1, pbStr(t.text)), ...(t.lang === undefined ? [] : pbLen(2, pbStr(t.lang)))])
+  )
+}
+// FeedMessage.entity = 2; FeedEntity.id = 1, alert = 5;
+// Alert.header_text = 10, description_text = 11.
+function pbFeed(alerts) {
+  return new Uint8Array(alerts.flatMap((a) =>
+    pbLen(2, [
+      ...pbLen(1, pbStr(a.id)),
+      ...pbLen(5, [
+        ...(a.header ? pbLen(10, pbTranslated(a.header)) : []),
+        ...(a.desc ? pbLen(11, pbTranslated(a.desc)) : [])
+      ])
+    ])
+  ))
+}
+
+test("the test's own protobuf writer round-trips through the decoder", () => {
+  // Asserted before anything relies on it: a writer that is wrong would make
+  // every test below pass or fail for reasons that have nothing to do with
+  // Gtfs.js. The header path is already covered by the fixture, so it is the
+  // honest thing to check the writer against.
+  const feed = Gtfs.decodeAlerts(pbFeed([
+    { id: "written", header: [{ text: "a headline", lang: "en" }] }
+  ]))
+  assert.equal(feed.alerts.length, 1)
+  assert.equal(feed.alerts[0].id, "written")
+  assert.equal(feed.alerts[0].headerText, "a headline")
+})
+
+test("decodeAlerts reads the description, not only the headline", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const described = feed.alerts.filter((a) => a.descriptionText)
+  assert.equal(feed.alerts.length, 195)
+  assert.equal(described.length, 194, "194 of the 195 fixture alerts carry description_text")
+  const a = described[0]
+  assert.notEqual(a.descriptionText, a.headerText, "the description is not a copy of the headline")
+  assert.ok(a.descriptionText.length > 10,
+    `the description should be prose, got ${JSON.stringify(a.descriptionText)}`)
+})
+
+test("decodeAlerts leaves an alert without a description with an empty string", () => {
+  // Not undefined: it reaches a QML Text's `text`, and Panel.qml decides
+  // whether a row is expandable by asking whether this is empty.
+  const feed = Gtfs.decodeAlerts(pbFeed([{ id: "bare", header: [{ text: "h", lang: "en" }] }]))
+  assert.equal(feed.alerts[0].descriptionText, "")
+})
+
+test("decodeAlerts prefers the plain-English translation over the HTML one", () => {
+  // The ordering flip the fixture cannot show. QML Text defaults to AutoText,
+  // so markup arriving here is RENDERED, not displayed -- the headline and the
+  // description would both silently turn into styled HTML.
+  const feed = Gtfs.decodeAlerts(pbFeed([{
+    id: "flipped",
+    header: [{ text: "<p>marked up</p>", lang: "en-html" }, { text: "plain headline", lang: "en" }],
+    desc: [{ text: "<p>marked up</p>", lang: "en-html" }, { text: "plain detail", lang: "en" }]
+  }]))
+  assert.equal(feed.alerts[0].headerText, "plain headline")
+  assert.equal(feed.alerts[0].descriptionText, "plain detail")
+})
+
+test("decodeAlerts falls back to the first translation when none says en", () => {
+  // A feed that names no language at all must still show something. Dropping
+  // the text would hide a real service alert over a missing tag.
+  const feed = Gtfs.decodeAlerts(pbFeed([{
+    id: "untagged",
+    header: [{ text: "untagged headline" }],
+    desc: [{ text: "untagged detail" }, { text: "second", lang: "fr" }]
+  }]))
+  assert.equal(feed.alerts[0].headerText, "untagged headline")
+  assert.equal(feed.alerts[0].descriptionText, "untagged detail")
+})
+
+test("decodeAlerts bounds the description at the cap, and says where it cut", () => {
+  const feed = Gtfs.decodeAlerts(pbFeed([
+    { id: "exact", desc: [{ text: "x".repeat(2000), lang: "en" }] },
+    { id: "over", desc: [{ text: "x".repeat(2001), lang: "en" }] },
+    { id: "way-over", desc: [{ text: "x".repeat(50000), lang: "en" }] }
+  ]))
+  const [exact, over, wayOver] = feed.alerts
+  assert.equal(exact.descriptionText.length, 2000, "exactly at the cap is not truncated")
+  assert.ok(!exact.descriptionText.endsWith("…"), "and is not marked")
+  assert.equal(over.descriptionText.length, 2000, "the cap counts the ellipsis, not just the text")
+  assert.ok(over.descriptionText.endsWith("…"), "a cut must be visible, not silent")
+  assert.equal(wayOver.descriptionText.length, 2000)
+})
+
+test("decodeAlerts bounds the headline the same way as the description", () => {
+  // The headline is uncapped today and reaches the same QML Text. Nothing in
+  // the feed is that long, which is exactly why it would go unnoticed.
+  const feed = Gtfs.decodeAlerts(pbFeed([
+    { id: "long", header: [{ text: "h".repeat(50000), lang: "en" }] }
+  ]))
+  assert.equal(feed.alerts[0].headerText.length, 2000)
+  assert.ok(feed.alerts[0].headerText.endsWith("…"))
+})
+
+test("the fixture's real descriptions all sit under the cap", () => {
+  // The cap is defensive, not editorial: it exists so a pathological feed
+  // cannot hand one Text element a multi-megabyte string, and it should never
+  // be the reason a rider loses the end of a real alert.
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const cut = feed.alerts.filter((a) => a.descriptionText.endsWith("…"))
+  assert.equal(cut.length, 0, "no real alert in the fixture is truncated")
+})

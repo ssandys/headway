@@ -603,3 +603,377 @@ test("alertsForDisplay attributes an express alert to its trunk route", () => {
   assert.equal(out.length, 1, "the alert survives")
   assert.equal(out[0].matchedRoute, "6", "6X normalizes onto the 6")
 })
+
+test("alertsForDisplay carries the alert's description through to the panel", () => {
+  // Issue #6. alertsForDisplay builds a FRESH object per alert rather than
+  // passing the decoded one through, so a field it does not name by hand never
+  // reaches Panel.qml however well Gtfs.js decoded it.
+  const alerts = [
+    { id: "a", alertType: "Delays", routes: ["6"], periods: [], headerText: "six",
+      // Deliberately free of bracketed tokens: this test is about the field
+      // being carried onto a fresh object, not about what is substituted into
+      // it. The substitutions have their own tests below.
+      descriptionText: "Use the Lexington Av line between 125 St and Grand Central." }
+  ]
+  const out = Model.alertsForDisplay(["6"], alerts, 1000)
+  assert.equal(out[0].descriptionText,
+    "Use the Lexington Av line between 125 St and Grand Central.")
+})
+
+// ---------------------------------------------------------------------------
+// Icon placeholders in alert text (issue #6)
+//
+// The feed writes icons as bracketed words, and they reached the panel as
+// literal text: "[shuttle bus icon] Free T102 shuttle buses make all stops
+// between 125 St and Hunts Point Av. Transfer between [6] and [shuttle bus
+// icon] at Hunts Point Av [accessibility icon] and 125 St [accessibility icon]".
+//
+// Measured over the committed fixture and the live feed: three tokens and only
+// three -- [accessibility icon] 165/180, [shuttle bus icon] 74/61, [airplane
+// icon] 3/1. The route ids in the same bracket syntax are deliberately NOT
+// substituted; they are far more common (1382 occurrences against 242) and a
+// circled letter would lose the colour that makes an MTA bullet mean anything.
+//
+// Built from codepoints rather than typed, here as well as in Model.js: these
+// are private-use characters that a copy-paste or an editor round-trip can
+// quietly drop, and the failure would look like a passing test.
+const ICON_ACCESS = String.fromCodePoint(0xF193)
+const ICON_BUS = String.fromCodePoint(0xF207)
+const ICON_PLANE = String.fromCodePoint(0xF072)
+
+test("alertTextWithIcons draws the three placeholders the feed actually sends", () => {
+  assert.equal(Model.alertTextWithIcons("[accessibility icon] ADA station"),
+    ICON_ACCESS + "  ADA station")
+  assert.equal(Model.alertTextWithIcons("[shuttle bus icon] Free T102 buses"),
+    ICON_BUS + "  Free T102 buses")
+  assert.equal(Model.alertTextWithIcons("[airplane icon] JFK"),
+    ICON_PLANE + "  JFK")
+})
+
+test("alertTextWithIcons replaces every occurrence, not just the first", () => {
+  const out = Model.alertTextWithIcons(
+    "Transfer between [6] and [shuttle bus icon] at Hunts Point Av " +
+    "[accessibility icon] and 125 St [accessibility icon]")
+  assert.equal(out.split(ICON_ACCESS).length - 1, 2, "both accessibility icons")
+  assert.equal(out.split(ICON_BUS).length - 1, 1)
+  assert.equal(out.indexOf("["), out.indexOf("[6]"),
+    "the only bracket left standing is the route id")
+})
+
+test("alertTextWithIcons leaves route ids and unknown placeholders alone", () => {
+  const kept = ["[6]", "[6X]", "[SIR]", "[bicycle icon]", "[]",
+                "[accessibility]", "accessibility icon", "[ accessibility icon ]"]
+  kept.forEach(function (k) {
+    assert.equal(Model.alertTextWithIcons("x " + k + " y"), "x " + k + " y", k)
+  })
+})
+
+test("alertTextWithIcons never lengthens the string, so the decode cap still holds", () => {
+  // Gtfs.js bounds both alert strings at 2000 characters BEFORE this runs. A
+  // substitution that grew the text would put it back over that bound with
+  // nothing downstream left to catch it. 20 characters become 1, every time.
+  const text = "[accessibility icon] ".repeat(60) + "[shuttle bus icon]"
+  assert.ok(Model.alertTextWithIcons(text).length < text.length)
+})
+
+test("alertTextWithIcons survives an absent string and a prototype-chain token", () => {
+  assert.equal(Model.alertTextWithIcons(""), "")
+  assert.equal(Model.alertTextWithIcons(undefined), "")
+  assert.equal(Model.alertTextWithIcons(null), "")
+  // The table is iterated, and a bare for-in walks the prototype chain.
+  assert.equal(Model.alertTextWithIcons("[constructor] [__proto__] [toString]"),
+    "[constructor] [__proto__] [toString]")
+})
+
+test("alertsForDisplay hands the panel text with its icons already drawn", () => {
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "[accessibility icon] lift out of service at 125 St",
+    descriptionText: "[shuttle bus icon] Free T102 buses make all stops" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)
+  assert.equal(out[0].headerText, ICON_ACCESS + "  lift out of service at 125 St")
+  assert.equal(out[0].descriptionText, ICON_BUS + "  Free T102 buses make all stops")
+})
+
+test("tooltipText draws icons too, because it shows the same headline", () => {
+  // The bar tooltip prints a red or amber alert's headline verbatim. Leaving
+  // it out would put the glyph in the panel and the literal words in the
+  // tooltip, for one and the same string.
+  const s = snap({ alerts: [{ id: "a", routes: ["L"], alertType: "Delays",
+    headerText: "[accessibility icon] lift out at Bedford Av", periods: [] }] })
+  assert.ok(Model.tooltipText(s, NOW).indexOf(ICON_ACCESS) >= 0,
+    "the tooltip should carry the glyph, not the placeholder words")
+})
+
+test("no icon placeholder survives the substitution, across the whole fixture", () => {
+  // The sweep that catches the MTA adding a fourth token. Runs over every
+  // header and description in the committed feed rather than a sample.
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  const leftover = new Set()
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      for (const m of Model.alertTextWithIcons(s).matchAll(/\[([^\]]*icon[^\]]*)\]/gi)) {
+        leftover.add(m[1])
+      }
+    }
+  }
+  assert.deepEqual([...leftover], [],
+    "an unmapped icon placeholder reaches the panel as literal words")
+})
+
+test("alertTextWithIcons pads the glyph, because the font paints over the space", () => {
+  // MEASURED, not guessed. After substitution the string really is U+F207,
+  // U+0020, "F", "r", "e", "e" -- the feed's own space is present and correct.
+  // The panel still drew "<bus>Free", because the glyph arrives from
+  // JetBrainsMono Nerd Font by fontconfig fallback while the body text is iA
+  // Writer Mono S, and the icon's ink is wider than the advance it is given,
+  // so it paints over the following space. The pad is what that ink absorbs.
+  //
+  // Tuned to a font pairing, and so the first thing to revisit if these ever
+  // look doubly spaced: that is this rule, not the feed.
+  assert.equal(Model.alertTextWithIcons("[shuttle bus icon] Free"), ICON_BUS + "  Free")
+  // A token at the very end has nothing to separate from and still pads: one
+  // rule, no special case, and a trailing space is invisible anyway.
+  assert.equal(Model.alertTextWithIcons("ends with [airplane icon]"),
+    "ends with " + ICON_PLANE + " ")
+})
+
+// ---------------------------------------------------------------------------
+// Route ids in alert text (issue #6)
+//
+// The feed writes route ids in the same bracket syntax as the icons, and they
+// are the larger half: 1382 occurrences in the fixture against 242 icon ones.
+// 1363 of those have a circled Unicode form; the 19 that do not are [SIR] x10,
+// [6X] x5 and [7X] x4, which stay bracketed.
+//
+// Monochrome, unlike the coloured RouteBullet at the head of the row. That is
+// the accepted cost: bracketed text does not match the bullet either, and a
+// circled glyph at least reads as a route rather than as punctuation.
+//
+// No pad here, unlike the Nerd Font icons. These arrive from a different
+// fallback font and may well have honest metrics; padding blind would show as
+// a double gap. If they turn out to eat the following space too, that is a
+// one-line change and this comment is why it was not made up front.
+const CIRCLED_6 = String.fromCodePoint(0x2465)
+const CIRCLED_1 = String.fromCodePoint(0x2460)
+const CIRCLED_A = String.fromCodePoint(0x24B6)
+const CIRCLED_Z = String.fromCodePoint(0x24CF)
+
+test("alertTextWithRouteGlyphs draws single-character route ids as circled glyphs", () => {
+  assert.equal(Model.alertTextWithRouteGlyphs("[6] runs in two sections"),
+    CIRCLED_6 + " runs in two sections")
+  assert.equal(Model.alertTextWithRouteGlyphs("take the [1]"), "take the " + CIRCLED_1)
+  assert.equal(Model.alertTextWithRouteGlyphs("[A] is rerouted"), CIRCLED_A + " is rerouted")
+  assert.equal(Model.alertTextWithRouteGlyphs("[Z] skips"), CIRCLED_Z + " skips")
+})
+
+test("alertTextWithRouteGlyphs leaves the ids with no circled form bracketed", () => {
+  // [SIR], [6X] and [7X] -- 19 occurrences in the fixture between them. A
+  // partial substitution is correct here: the alternative is inventing a glyph.
+  ;["[6X]", "[7X]", "[SIR]", "[FS]", "[GS]"].forEach(function (id) {
+    assert.equal(Model.alertTextWithRouteGlyphs("the " + id + " train"),
+      "the " + id + " train", id)
+  })
+})
+
+test("alertTextWithRouteGlyphs replaces every occurrence of an id", () => {
+  const out = Model.alertTextWithRouteGlyphs("[6] and [6] and [6]")
+  assert.equal(out, CIRCLED_6 + " and " + CIRCLED_6 + " and " + CIRCLED_6)
+})
+
+test("alertTextWithRouteGlyphs leaves anything that is not a bare id alone", () => {
+  ;["[constructor]", "[__proto__]", "[]", "[accessibility icon]", "[6 ]", "6"]
+    .forEach(function (kept) {
+      assert.equal(Model.alertTextWithRouteGlyphs("x " + kept + " y"), "x " + kept + " y", kept)
+    })
+})
+
+test("alertTextWithRouteGlyphs never lengthens the string", () => {
+  const text = "[6] [A] [1] ".repeat(50)
+  assert.ok(Model.alertTextWithRouteGlyphs(text).length < text.length)
+})
+
+test("alertTextWithRouteGlyphs survives an absent string", () => {
+  assert.equal(Model.alertTextWithRouteGlyphs(""), "")
+  assert.equal(Model.alertTextWithRouteGlyphs(undefined), "")
+  assert.equal(Model.alertTextWithRouteGlyphs(null), "")
+})
+
+test("alertsForDisplay applies icons AND route glyphs, in one pass", () => {
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "No [6] between Hunts Point Av and 125 St",
+    descriptionText: "Transfer between [6] and [shuttle bus icon] at Hunts Point Av" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)
+  assert.equal(out[0].headerText, "No " + CIRCLED_6 + " between Hunts Point Av and 125 St")
+  assert.equal(out[0].descriptionText,
+    "Transfer between " + CIRCLED_6 + " and " + ICON_BUS + "  at Hunts Point Av")
+})
+
+test("no single-character route id survives into display text, across the fixture", () => {
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  const leftover = new Set()
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      const shown = Model.alertTextWithRouteGlyphs(Model.alertTextWithIcons(s))
+      for (const m of shown.matchAll(/\[([A-Z0-9])\]/g)) leftover.add(m[1])
+    }
+  }
+  assert.deepEqual([...leftover], [], "a bare route id still reaching the panel as text")
+})
+
+test("bulletLabelSize leaves a one-character bullet exactly as it ships", () => {
+  // Every bullet in the bar, the arrival rows and the saved list is one
+  // character. This is a repair to the case nobody has looked at, not a
+  // restyle of the case everybody sees -- so this number must not move.
+  assert.equal(Model.bulletLabelSize(20, "6"), 20 * 0.62)
+  assert.equal(Model.bulletLabelSize(18, "A"), 18 * 0.62)
+})
+
+test("bulletLabelSize shrinks a three-character label to fit the disc", () => {
+  // SIR is on 21 stations. At 0.62 the three glyphs need about 1.1x the
+  // disc's width, which is the overflow visible in the station list today.
+  const d = 20
+  const size = Model.bulletLabelSize(d, "SIR")
+  assert.ok(size < d * 0.62, "must be smaller than the one-character size")
+  assert.ok(3 * 0.6 * size <= d * 0.8 + 0.001,
+    "three monospace advances must fit the usable chord across the disc")
+})
+
+test("bulletLabelSize survives an empty or missing label", () => {
+  assert.equal(Model.bulletLabelSize(20, ""), 20 * 0.62)
+  assert.equal(Model.bulletLabelSize(20, undefined), 20 * 0.62)
+})
+
+// ---------------------------------------------------------------------------
+// Alert text as runs (issue #6)
+//
+// Word-level, because a Text inside a Flow needs an explicit width to wrap and
+// CONTRIBUTING is explicit that wrapMode does not constrain one. Spacing rides
+// on each run rather than on Flow.spacing, or "[SIR]," renders as "SIR ,".
+
+const runText = (v, sp) => ({ t: "s", v: v, sp: sp })
+const runRoute = (v, sp) => ({ t: "r", v: v, sp: sp })
+
+test("alertRuns splits a line into words, marking which ones follow a space", () => {
+  assert.deepEqual(Model.alertRuns("No trains"), [
+    [runText("No", false), runText("trains", true)]
+  ])
+})
+
+test("alertRuns turns a bracketed route id into a route run", () => {
+  assert.deepEqual(Model.alertRuns("No [6] between"), [
+    [runText("No", false), runRoute("6", true), runText("between", true)]
+  ])
+})
+
+test("alertRuns keeps trailing punctuation against its bullet", () => {
+  // The defect the spike had: with uniform Flow spacing this renders as
+  // "SIR , see below", and the spike's tokenizer dropped the comma entirely.
+  assert.deepEqual(Model.alertRuns("the [SIR], see"), [
+    [runText("the", false), runRoute("SIR", true),
+     runText(",", false), runText("see", true)]
+  ])
+})
+
+test("alertRuns splits leading punctuation off a route id too", () => {
+  // The bracket itself is NOT leading punctuation. Stripping it would leave
+  // "6]", which is not a bracketed id, and every route in the feed would come
+  // back out as plain text having looked like it worked.
+  assert.deepEqual(Model.alertRuns("take ([6])"), [
+    [runText("take", false), runText("(", true),
+     runRoute("6", false), runText(")", false)]
+  ])
+})
+
+test("alertRuns carries the feed's id, express marker and all", () => {
+  // RouteBullet normalizes for the label and decides disc versus diamond,
+  // exactly as it does at the row head. Stripping the X here would throw away
+  // the one thing the circled glyphs could never express.
+  assert.deepEqual(Model.alertRuns("[6X] and [SIR]"), [
+    [runRoute("6X", false), runText("and", true), runRoute("SIR", true)]
+  ])
+})
+
+test("alertRuns does not mistake ordinary bracketed words for routes", () => {
+  ;["[icon]", "[6789]", "[]", "[a]"].forEach(function (word) {
+    const runs = Model.alertRuns("x " + word)
+    assert.equal(runs[0][1].t, "s", word + " must stay text")
+    assert.equal(runs[0][1].v, word)
+  })
+})
+
+test("alertRuns gives a blank line an empty array, so it can be a spacer", () => {
+  // An empty Flow collapses to zero height, which is how the spike lost the
+  // paragraph break. The line has to survive as something the panel can size.
+  assert.deepEqual(Model.alertRuns("a\n\nb"), [
+    [runText("a", false)],
+    [],
+    [runText("b", false)]
+  ])
+})
+
+test("alertRuns collapses a run of spaces into one gap, not empty runs", () => {
+  assert.deepEqual(Model.alertRuns("a   b"), [
+    [runText("a", false), runText("b", true)]
+  ])
+})
+
+test("alertRuns substitutes icons before tokenizing, so a glyph rides in a word", () => {
+  const out = Model.alertRuns("[shuttle bus icon] Free")
+  assert.equal(out[0][0].t, "s")
+  assert.equal(out[0][0].v.codePointAt(0), 0xF207, "the glyph, not the placeholder")
+})
+
+test("alertRuns returns nothing for an absent or non-string input", () => {
+  assert.deepEqual(Model.alertRuns(""), [])
+  assert.deepEqual(Model.alertRuns(undefined), [])
+  assert.deepEqual(Model.alertRuns(null), [])
+  assert.deepEqual(Model.alertRuns(42), [])
+})
+
+test("alertRuns round-trips every alert in the fixture without losing a character", () => {
+  // THE test. The spike's tokenizer silently ate a comma, and nothing it
+  // rendered looked wrong enough to notice. Reassembling the runs must
+  // reproduce the icon-substituted input exactly, modulo runs of spaces
+  // collapsing -- which is the only thing tokenizing is allowed to change.
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  let checked = 0
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      if (!s) continue
+      const rebuilt = Model.alertRuns(s)
+        .map((line) => line
+          .map((r) => (r.sp ? " " : "") + (r.t === "r" ? "[" + r.v + "]" : r.v))
+          .join(""))
+        .join("\n")
+      const expected = Model.alertTextWithIcons(s).split("\n")
+        .map((line) => line.split(" ").filter((w) => w !== "").join(" "))
+        .join("\n")
+      assert.equal(rebuilt, expected, "lost text in: " + JSON.stringify(s.slice(0, 80)))
+      checked++
+    }
+  }
+  assert.equal(checked, 389, "both strings of all 195 alerts, one of which has no description")
+})
+
+test("alertsForDisplay carries runs beside the strings, changing neither", () => {
+  // Purely additive. Three variants of one string in circulation is how a
+  // reader ends up unable to say which one a surface shows -- and if the Flow
+  // rendering is ever reverted, the delegate falls back to a Text on a string
+  // that still reads correctly.
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "No [6] between Hunts Point Av",
+    descriptionText: "[shuttle bus icon] Free T102 buses" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)[0]
+
+  assert.equal(out.headerText, "No " + CIRCLED_6 + " between Hunts Point Av",
+    "the string keeps its circled glyph, exactly as it ships")
+  assert.equal(out.headerRuns[0][1].t, "r")
+  assert.equal(out.headerRuns[0][1].v, "6")
+  assert.equal(out.descriptionRuns[0][0].v.codePointAt(0), 0xF207)
+})
