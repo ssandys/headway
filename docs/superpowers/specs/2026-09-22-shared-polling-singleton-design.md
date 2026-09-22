@@ -188,8 +188,14 @@ would report "1 or fewer" too.
 
 ## Not yet measured
 
-Three of the plan's checks did not happen, and the change should not be
-described as verified until they do.
+**Two checks remain**, and the change should not be described as verified until
+they do. Both want two real monitors, which is where they are being taken.
+
+Set up: `./bin/dev up`, and disable the released `ssandys.headway` first
+(`omarchy plugin disable ssandys.headway`) or its unfixed copy polls alongside
+the dev one and every count is off by its contribution. Watch out for #14 while
+doing it — `bin/dev up` can leave the shell dead, silently, and
+`omarchy restart shell` is the recovery.
 
 - ~~**Refcount drift across reloads.**~~ **Measured and closed** — see below.
 - **One notification rather than two.** No new alert arrived during the
