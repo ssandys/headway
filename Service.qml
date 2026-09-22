@@ -1,3 +1,4 @@
+pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -11,9 +12,51 @@ import "StationData.js" as StationData
 Item {
   id: root
 
-  // Injected by Panel.qml. Ui/Panel.qml declares `settings`; this Item does
-  // not, so it must be handed down explicitly.
+  // Handed over by Panel.qml through attach(). Ui/Panel.qml declares
+  // `settings`; this Item does not, and as a SINGLETON it cannot take a bound
+  // property from a caller either -- there is no caller to bind to.
   property var settings: ({})
+
+  // HOW MANY WIDGETS ARE ALIVE, not how many monitors exist. The bar makes a
+  // widget per bar surface and a surface per monitor, so before this file was a
+  // singleton every Timer, every Process and every notify-send in it ran once
+  // per monitor, and two instances wrote headway.json with nothing ordering
+  // them. MEASURED on 2026-09-22 with a headless second output: a probe
+  // singleton's attach count went from 1 to 2 the moment the surface appeared.
+  //
+  // Clamped at zero on the way down. bin/dev reloads the plugin in place, and a
+  // reload that recreated widgets without destroying them would otherwise climb
+  // this forever and poll for the life of the shell.
+  property int consumers: 0
+  // Set by the first attach(), so a later surface handing over the same
+  // settings object does not churn a bound property every time a monitor is
+  // plugged in.
+  property bool settingsAttached: false
+  // How many panels are open, not whether THIS one is: with several surfaces,
+  // "open" means any of them, and the faster interval applies while any is.
+  property int openPanels: 0
+  readonly property bool shouldRun: root.consumers > 0
+
+  function attach(options) {
+    if (options && options.settings && !root.settingsAttached) {
+      root.settings = options.settings
+      root.settingsAttached = true
+    }
+    root.consumers = root.consumers + 1
+  }
+
+  function detach(options) {
+    if (options && options.wasOpen) root.setPanelOpen(true, false)
+    root.consumers = root.consumers > 0 ? root.consumers - 1 : 0
+  }
+
+  // A DELTA, not an absolute: an absolute would let the last panel to change
+  // state speak for every other panel.
+  function setPanelOpen(wasOpen, isOpen) {
+    if (wasOpen === isOpen) return
+    var next = root.openPanels + (isOpen ? 1 : -1)
+    root.openPanels = next > 0 ? next : 0
+  }
 
   function setting(key, fallback) {
     var value = root.settings ? root.settings[key] : undefined
@@ -27,8 +70,6 @@ Item {
   readonly property int trainsPerDirection: setting("trainsPerDirection", 3)
   readonly property bool notifyRouteAlert: setting("notifyRouteAlert", true)
   readonly property bool notifyFeedStale: setting("notifyFeedStale", true)
-
-  property bool panelOpen: false
 
   property bool ok: true
   property string error: ""
@@ -44,7 +85,7 @@ Item {
   // absolute epoch seconds, so this is the whole reason a 30s poll still reads
   // as live.
   Timer {
-    interval: 1000; running: true; repeat: true
+    interval: 1000; running: root.shouldRun; repeat: true
     onTriggered: root.nowSec = Math.floor(Date.now() / 1000)
   }
 
@@ -648,8 +689,8 @@ Item {
 
   Timer {
     id: pollTimer
-    interval: (root.panelOpen ? root.openInterval : root.idleInterval) * 1000
-    running: true; repeat: true; triggeredOnStart: true
+    interval: (root.openPanels > 0 ? root.openInterval : root.idleInterval) * 1000
+    running: root.shouldRun; repeat: true; triggeredOnStart: true
     onTriggered: root.refresh()
   }
 
@@ -660,7 +701,7 @@ Item {
   // to 60s and the resolver failing: first poll at T+2ms, next at T+30003ms.
   Timer {
     interval: Fetch.retryDelaySec(root.alertsFailures, root.alertsInterval) * 1000
-    running: true; repeat: true; triggeredOnStart: true
+    running: root.shouldRun; repeat: true; triggeredOnStart: true
     onTriggered: root.refreshAlerts()
   }
 
