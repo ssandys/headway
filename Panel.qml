@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "."
 import "Model.js" as Model
 import "Stations.js" as Stations
 import "StationData.js" as StationData
@@ -56,11 +57,17 @@ Panel {
   // injected, rather than galley's hardcoded family name.
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
 
-  Service {
-    id: service
-    settings: root.settings
-    panelOpen: root.opened
-  }
+  // NOT instantiated: Service.qml is a singleton, so this widget registers
+  // interest in the one shared instance rather than owning its own. The bar
+  // makes a widget per bar surface and a surface per monitor -- measured, with
+  // a headless output -- so an instance here would mean a poll, a notify-send
+  // and a headway.json writer per monitor.
+  //
+  // wasOpen goes out with detach() because a surface destroyed while its panel
+  // is open would otherwise leave openPanels counting a panel that is gone.
+  Component.onCompleted: Service.attach({ settings: root.settings })
+  Component.onDestruction: Service.detach({ wasOpen: root.opened })
+  onOpenedChanged: Service.setPanelOpen(!root.opened, root.opened)
 
   // BarIconButton, NOT WidgetButton. It paints the glyph through OpticalGlyph,
   // which centres on the painted ink rather than the monospace advance cell;
@@ -80,7 +87,7 @@ Panel {
     // badge child below, so a minute ticking over no longer changes the
     // button's width and shoves its neighbours along the bar.
     text: Model.BAR_GLYPH
-    tooltipText: service.tooltip
+    tooltipText: Service.tooltip
     // `foreground`, not `color` — that is WidgetButton's own colour property.
     // And `barForeground` rather than `foreground`: bar chrome convention, so
     // a transparent bar recolours this glyph along with its neighbours
@@ -90,8 +97,8 @@ Panel {
     // never changes colour, so a red glyph carrying a number means "a train is
     // coming, AND something is wrong".
     foreground: {
-      if (service.barState.severity === "error") return Model.COLOR_ERROR
-      if (service.barState.severity === "warn") return Model.COLOR_WARN
+      if (Service.barState.severity === "error") return Model.COLOR_ERROR
+      if (Service.barState.severity === "warn") return Model.COLOR_WARN
       return root.barForeground
     }
 
@@ -128,7 +135,7 @@ Panel {
         // this circle holds two characters and "now" is three. badgeText
         // returns a bullet for an arriving train; the panel rows below still
         // spell the word out, where there is room for it.
-        text: service.barState.badge
+        text: Service.barState.badge
         color: Color.background
         font.family: root.fontFamily
         font.bold: true
@@ -138,7 +145,7 @@ Panel {
     }
 
     onPressed: function (which) {
-      if (which === Qt.MiddleButton) { service.refresh(); return }
+      if (which === Qt.MiddleButton) { Service.refresh(); return }
       if (root.opened) root.close()
       else root.open()
     }
@@ -178,7 +185,7 @@ Panel {
       // on the field itself.
       onCloseRequested: root.close()
       onTextKey: function (text) {
-        if (text === "r") service.refresh()
+        if (text === "r") Service.refresh()
       }
     }
 
@@ -222,8 +229,8 @@ Panel {
           // Data age, which the spec puts in the header. The wording comes from
           // Model.feedAgeText so the stale boundary is tested rather than
           // reimplemented in a binding.
-          text: Model.feedAgeText(service.feedTimestamp, service.nowSec,
-                                  service.staleAfterSec)
+          text: Model.feedAgeText(Service.feedTimestamp, Service.nowSec,
+                                  Service.staleAfterSec)
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -239,18 +246,18 @@ Panel {
         // The plugin header carries the name now, so this row is the station
         // alone and disappears when there is not one -- the empty-state line
         // below already says so.
-        visible: !!service.station
+        visible: !!Service.station
         Text {
-          text: service.station ? service.station.name : ""
+          text: Service.station ? Service.station.name : ""
           color: root.barForeground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
         }
         Item { Layout.fillWidth: true }
         Text {
-          visible: !!service.saved
-          text: service.saved
-            ? Model.directionLabelOf(service.station, service.saved.direction)
+          visible: !!Service.saved
+          text: Service.saved
+            ? Model.directionLabelOf(Service.station, Service.saved.direction)
             : ""
           color: root.barForeground
           opacity: 0.6
@@ -259,15 +266,15 @@ Panel {
       }
 
       Text {
-        visible: !service.ok
-        text: "feed unreachable - " + service.error
+        visible: !Service.ok
+        text: "feed unreachable - " + Service.error
         color: Model.COLOR_ERROR
         font.pixelSize: Style.font.caption
       }
 
       // ---- arrivals ----
       Repeater {
-        model: service.arrivals.slice(0, service.trainsPerDirection)
+        model: Service.arrivals.slice(0, Service.trainsPerDirection)
         delegate: RowLayout {
           id: arrivalRow
           required property var modelData
@@ -306,8 +313,8 @@ Panel {
       }
 
       Text {
-        visible: service.ok && service.arrivals.length === 0
-        text: service.saved ? "No trains scheduled" : "No station saved yet"
+        visible: Service.ok && Service.arrivals.length === 0
+        text: Service.saved ? "No trains scheduled" : "No station saved yet"
         color: root.barForeground
         opacity: 0.6
         font.pixelSize: Style.font.caption
@@ -315,11 +322,11 @@ Panel {
 
       // ---- alerts ----
       Repeater {
-        // service.liveAlerts, NOT Model.alertsFor(..., service.nowSec). A
+        // Service.liveAlerts, NOT Model.alertsFor(..., Service.nowSec). A
         // Repeater's model is a `var` compared by reference, so binding it to
         // anything that changes every second rebuilds every delegate every
         // second. liveAlerts is keyed on a minute-resolution clock.
-        model: service.liveAlerts
+        model: Service.liveAlerts
         delegate: ColumnLayout {
           id: alertRow
           required property var modelData
@@ -534,7 +541,7 @@ Panel {
         spacing: Style.space(2)
 
       Repeater {
-        model: service.stations
+        model: Service.stations
         delegate: RowLayout {
           id: savedRow
           required property var modelData
@@ -549,7 +556,7 @@ Panel {
             // shown a raw id like "L08" when a perfectly good name was on disk.
             text: (Stations.byId(StationData.STATIONS, savedRow.modelData.stopId)
                    || { name: savedRow.modelData.name || savedRow.modelData.stopId }).name
-            onClicked: service.setActive(savedRow.modelData.stopId)
+            onClicked: Service.setActive(savedRow.modelData.stopId)
             // Compact, not Ui/Button.qml's defaults. Those are body size with
             // controlPaddingY (6, so 12px vertical), which made these rows 41px
             // tall and the list read as a column of buttons rather than a list
@@ -603,7 +610,7 @@ Panel {
               // flipping a background row's direction used to drag the panel
               // and the bar over to it. Changing a row's setting is not a
               // request to look at that row -- clicking its name is.
-              service.setDirection(
+              Service.setDirection(
                 savedRow.modelData.stopId,
                 Model.nextDirection(dirs, savedRow.modelData.direction))
             }
@@ -611,7 +618,7 @@ Panel {
 
           Button {
             text: "✕"
-            onClicked: service.removeStation(savedRow.modelData.stopId)
+            onClicked: Service.removeStation(savedRow.modelData.stopId)
             fontSize: Style.font.caption
             horizontalPadding: Style.space(6)
             verticalPadding: Style.space(2)
@@ -657,7 +664,7 @@ Panel {
         spacing: Style.space(2)
 
       Repeater {
-        model: Stations.search(StationData.STATIONS, root.query, service.origin, 6)
+        model: Stations.search(StationData.STATIONS, root.query, Service.origin, 6)
         delegate: RowLayout {
           id: hit
           required property var modelData
@@ -726,7 +733,7 @@ Panel {
               // is what made the spec's own motivating example fail: at Union Sq,
               // "next train" across seven routes is not a number anyone can plan
               // around, which is the entire reason the filter is specced.
-              onClicked: service.saveStation({
+              onClicked: Service.saveStation({
                 stopId: hit.modelData.id, name: hit.modelData.name,
                 routes: hit.picked, direction: dirButton.modelData.dir
               })
