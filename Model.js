@@ -216,7 +216,18 @@ var ALERT_ICONS = {
   "[airplane icon]": String.fromCodePoint(0xF072)
 }
 
-// Substitution only ever SHORTENS -- twenty characters become one -- so the
+// A space the ink eats. MEASURED: after substitution the string really is
+// U+F207, U+0020, "F", "r", "e", "e" -- the feed's own space is there and
+// correct -- and the panel still drew "<bus>Free". The glyph arrives from
+// JetBrainsMono Nerd Font by fontconfig fallback while the body text is iA
+// Writer Mono S, and the icon's ink is wider than the advance it is given, so
+// it paints straight over the space that follows. This is the one it absorbs.
+//
+// Tuned to a font pairing, which makes it the first thing to revisit if these
+// ever look doubly spaced rather than tightly. It is this line, not the feed.
+var ICON_PAD = " "
+
+// Substitution only ever SHORTENS -- twenty characters become two -- so the
 // 2000-character cap Gtfs.js applies at decode still holds afterwards and
 // nothing downstream needs to re-bound anything.
 //
@@ -230,7 +241,7 @@ function alertTextWithIcons(text) {
     // read as one more token to substitute.
     if (!Object.prototype.hasOwnProperty.call(ALERT_ICONS, token)) continue
     if (out.indexOf(token) < 0) continue
-    out = out.split(token).join(ALERT_ICONS[token])
+    out = out.split(token).join(ALERT_ICONS[token] + ICON_PAD)
   }
   return out
 }

@@ -640,11 +640,11 @@ const ICON_PLANE = String.fromCodePoint(0xF072)
 
 test("alertTextWithIcons draws the three placeholders the feed actually sends", () => {
   assert.equal(Model.alertTextWithIcons("[accessibility icon] ADA station"),
-    ICON_ACCESS + " ADA station")
+    ICON_ACCESS + "  ADA station")
   assert.equal(Model.alertTextWithIcons("[shuttle bus icon] Free T102 buses"),
-    ICON_BUS + " Free T102 buses")
+    ICON_BUS + "  Free T102 buses")
   assert.equal(Model.alertTextWithIcons("[airplane icon] JFK"),
-    ICON_PLANE + " JFK")
+    ICON_PLANE + "  JFK")
 })
 
 test("alertTextWithIcons replaces every occurrence, not just the first", () => {
@@ -687,8 +687,8 @@ test("alertsForDisplay hands the panel text with its icons already drawn", () =>
     headerText: "[accessibility icon] lift out of service at 125 St",
     descriptionText: "[shuttle bus icon] Free T102 buses make all stops" }]
   const out = Model.alertsForDisplay(["6"], alerts, NOW)
-  assert.equal(out[0].headerText, ICON_ACCESS + " lift out of service at 125 St")
-  assert.equal(out[0].descriptionText, ICON_BUS + " Free T102 buses make all stops")
+  assert.equal(out[0].headerText, ICON_ACCESS + "  lift out of service at 125 St")
+  assert.equal(out[0].descriptionText, ICON_BUS + "  Free T102 buses make all stops")
 })
 
 test("tooltipText draws icons too, because it shows the same headline", () => {
@@ -717,4 +717,21 @@ test("no icon placeholder survives the substitution, across the whole fixture", 
   }
   assert.deepEqual([...leftover], [],
     "an unmapped icon placeholder reaches the panel as literal words")
+})
+
+test("alertTextWithIcons pads the glyph, because the font paints over the space", () => {
+  // MEASURED, not guessed. After substitution the string really is U+F207,
+  // U+0020, "F", "r", "e", "e" -- the feed's own space is present and correct.
+  // The panel still drew "<bus>Free", because the glyph arrives from
+  // JetBrainsMono Nerd Font by fontconfig fallback while the body text is iA
+  // Writer Mono S, and the icon's ink is wider than the advance it is given,
+  // so it paints over the following space. The pad is what that ink absorbs.
+  //
+  // Tuned to a font pairing, and so the first thing to revisit if these ever
+  // look doubly spaced: that is this rule, not the feed.
+  assert.equal(Model.alertTextWithIcons("[shuttle bus icon] Free"), ICON_BUS + "  Free")
+  // A token at the very end has nothing to separate from and still pads: one
+  // rule, no special case, and a trailing space is invisible anyway.
+  assert.equal(Model.alertTextWithIcons("ends with [airplane icon]"),
+    "ends with " + ICON_PLANE + " ")
 })
