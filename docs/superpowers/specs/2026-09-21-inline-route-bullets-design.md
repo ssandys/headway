@@ -142,7 +142,15 @@ headline row and the description — and changes what draws the text.
   `interactive: false` — wrapped in an `Item` of one line height so it centres
   against the words rather than setting the line's height.
 - `spaceWidth` is measured once per delegate from a hidden `TextMetrics` on a
-  single space at the same font and size, rather than guessed in pixels.
+  single space at the same size, rather than guessed in pixels — and it is
+  `TextMetrics.advanceWidth`, **not** `.width`. `.width` is the bounding rect,
+  a space has no ink, so it measures exactly `0` and every word runs into the
+  next. Found on the first deploy; confirmed with a headless probe asserting
+  `width === 0 && advanceWidth > 0`.
+- The text runs deliberately set no `font.family`. The alert `Text` they
+  replace never set one either: alert prose renders in the default face rather
+  than the bar's monospace, and setting it would restyle the panel while
+  claiming only to add bullets.
 
 The dimming rules are unchanged: `cls` still drives the headline's colour, and
 the description stays at `0.75` opacity.
