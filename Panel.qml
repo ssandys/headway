@@ -26,6 +26,16 @@ Panel {
   // at runtime as a ReferenceError that qmllint cannot see.
   property string query: ""
 
+  // Which alert row is showing its description, by the alert's own id. On the
+  // ROOT for the same reason as `query`, and for a second one: service
+  // .liveAlerts is keyed on a minute-resolution clock, so the alerts Repeater
+  // rebuilds every delegate once a minute. State held on a delegate would
+  // close an open row roughly every 60 seconds with nobody touching it.
+  //
+  // An id whose alert has since left the feed simply matches nothing, so there
+  // is no list to prune and no way for this to strand.
+  property string expandedAlertId: ""
+
   // REQUIRED. Ui/Panel.qml does not set its own implicit size, so a bar widget
   // must size itself from its button — every one of them does: galley:69,
   // colophon:81, and the first-party dropbox:135 and network:804. Without
@@ -310,36 +320,92 @@ Panel {
         // anything that changes every second rebuilds every delegate every
         // second. liveAlerts is keyed on a minute-resolution clock.
         model: service.liveAlerts
-        delegate: RowLayout {
+        delegate: ColumnLayout {
           id: alertRow
           required property var modelData
           Layout.fillWidth: true
-          spacing: Style.space(4)
+          spacing: Style.space(2)
           readonly property string cls:
             Model.classifyAlert(alertRow.modelData.alertType)
+          // The headline is often only "Delays" or "Service change"; the detail
+          // is here. Coerced because an older snapshot decoded before this
+          // field existed would leave it undefined, and a QML Text's `text`
+          // must be a string.
+          readonly property string detail:
+            alertRow.modelData.descriptionText || ""
+          readonly property bool expandable: alertRow.detail !== ""
+          readonly property bool expanded:
+            alertRow.expandable && root.expandedAlertId === alertRow.modelData.id
 
-          // The route the alert belongs to, so a list of alerts at an
-          // interchange is readable. Model.alertsForDisplay attributes and
-          // orders them; this just draws the bullet. An alert it could not
-          // attribute renders without one rather than being dropped.
-          RouteBullet {
-            visible: alertRow.modelData.matchedRoute !== ""
-            routeId: alertRow.modelData.matchedRoute
-            fontFamily: root.fontFamily
-            diameter: Style.font.caption * 1.4
-            Layout.alignment: Qt.AlignTop
+          RowLayout {
+            id: alertHeadline
+            Layout.fillWidth: true
+            spacing: Style.space(4)
+
+            // Handlers rather than a MouseArea or a Ui/Button: a Button would
+            // restyle a headline into a control, and a MouseArea would swallow
+            // events over the whole row. Both are disabled outright on an
+            // alert with no description, so a row that cannot open does not
+            // offer a cursor that says it can.
+            TapHandler {
+              enabled: alertRow.expandable
+              onTapped: root.expandedAlertId =
+                alertRow.expanded ? "" : alertRow.modelData.id
+            }
+            HoverHandler {
+              enabled: alertRow.expandable
+              cursorShape: Qt.PointingHandCursor
+            }
+
+            // The route the alert belongs to, so a list of alerts at an
+            // interchange is readable. Model.alertsForDisplay attributes and
+            // orders them; this just draws the bullet. An alert it could not
+            // attribute renders without one rather than being dropped.
+            RouteBullet {
+              visible: alertRow.modelData.matchedRoute !== ""
+              routeId: alertRow.modelData.matchedRoute
+              fontFamily: root.fontFamily
+              diameter: Style.font.caption * 1.4
+              Layout.alignment: Qt.AlignTop
+            }
+
+            Text {
+              Layout.fillWidth: true
+              wrapMode: Text.WordWrap
+              // PlainText, NOT the default AutoText. Alert text is upstream
+              // data and the feed ships an `en-html` translation of every
+              // string it sends; AutoText would RENDER markup that reached
+              // here rather than show it. Gtfs.js selects the `en` translation
+              // by language, and this is the half that does not depend on it.
+              textFormat: Text.PlainText
+              font.pixelSize: Style.font.caption
+              text: alertRow.modelData.headerText
+              color: alertRow.cls === "red" ? Model.COLOR_ERROR
+                   : alertRow.cls === "amber" ? Model.COLOR_WARN
+                   : root.barForeground
+              opacity: alertRow.cls === "info" || alertRow.cls === "planned"
+                       ? 0.6 : 1.0
+            }
           }
 
+          // An invisible layout child is excluded from the layout entirely, so
+          // a collapsed row costs no height rather than an empty gap.
           Text {
+            visible: alertRow.expanded
             Layout.fillWidth: true
+            // Starts under the first letter of the headline, not under the
+            // bullet: the bullet's own diameter plus the row's spacing. An
+            // alert with no attributable route draws no bullet and its
+            // headline starts at the edge, so this indents by nothing.
+            Layout.leftMargin: alertRow.modelData.matchedRoute !== ""
+                             ? Style.font.caption * 1.4 + Style.space(4)
+                             : 0
             wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
             font.pixelSize: Style.font.caption
-            text: alertRow.modelData.headerText
-            color: alertRow.cls === "red" ? Model.COLOR_ERROR
-                 : alertRow.cls === "amber" ? Model.COLOR_WARN
-                 : root.barForeground
-            opacity: alertRow.cls === "info" || alertRow.cls === "planned"
-                     ? 0.6 : 1.0
+            text: alertRow.detail
+            color: root.barForeground
+            opacity: 0.75
           }
         }
       }
