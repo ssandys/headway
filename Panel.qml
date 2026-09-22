@@ -337,6 +337,78 @@ Panel {
           readonly property bool expanded:
             alertRow.expandable && root.expandedAlertId === alertRow.modelData.id
 
+          // Lifted off the headline Text, which is now a Flow of runs. Both
+          // run components read these, and OPACITY is applied on the container
+          // rather than the run: put it on both and a planned alert's
+          // description compounds 0.6 with the Column's 0.75 down to 0.45,
+          // dimmer than anything that ships.
+          readonly property color runColor:
+            alertRow.cls === "red" ? Model.COLOR_ERROR
+          : alertRow.cls === "amber" ? Model.COLOR_WARN
+          : root.barForeground
+          readonly property real runOpacity:
+            alertRow.cls === "info" || alertRow.cls === "planned" ? 0.6 : 1.0
+
+          // The gap between words is the font's OWN space at this size, not a
+          // pixel guess: every run carries its own leading gap, so this is the
+          // one measurement the whole paragraph's spacing rests on.
+          //
+          // advanceWidth, NOT width. TextMetrics.width is the BOUNDING RECT,
+          // and a space has no ink, so it measures 0 -- every word in every
+          // alert ran into the next one. Measured in the live shell; nothing
+          // in the suite can see it.
+          //
+          // No font.family, here or in the word component below, because the
+          // alert Text this replaces never set one either -- alert prose
+          // deliberately renders in the default face rather than the bar's
+          // monospace. Setting it would restyle the panel while claiming to
+          // add bullets.
+          TextMetrics {
+            id: spaceMetrics
+            font.pixelSize: Style.font.caption
+            text: " "
+          }
+
+          Component {
+            id: runWordComp
+            Text {
+              property var run: null
+              // Set per call site: the headline tints by severity, the
+              // description does not. No opacity -- see runOpacity above.
+              property color tint: root.barForeground
+              text: run ? run.v : ""
+              leftPadding: (run && run.sp) ? spaceMetrics.advanceWidth : 0
+              // PlainText, NOT AutoText. The feed ships an `en-html`
+              // translation of every string it sends, and AutoText would
+              // RENDER markup that reached here rather than show it.
+              textFormat: Text.PlainText
+              font.pixelSize: Style.font.caption
+              color: tint
+            }
+          }
+
+          Component {
+            id: runBulletComp
+            Item {
+              property var run: null
+              // One line tall, so a bullet centres against the words instead
+              // of setting the line's height and spreading the paragraph.
+              implicitWidth: ((run && run.sp) ? spaceMetrics.advanceWidth : 0)
+                           + Style.font.caption * 1.4
+              implicitHeight: spaceMetrics.height
+              RouteBullet {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                routeId: parent.run ? parent.run.v : ""
+                fontFamily: root.fontFamily
+                diameter: Style.font.caption * 1.4
+                // NOT interactive: its MouseArea would eat the tap that
+                // expands the row.
+                interactive: false
+              }
+            }
+          }
+
           RowLayout {
             id: alertHeadline
             Layout.fillWidth: true
@@ -369,30 +441,46 @@ Panel {
               Layout.alignment: Qt.AlignTop
             }
 
-            Text {
+            Flow {
               Layout.fillWidth: true
-              wrapMode: Text.WordWrap
-              // PlainText, NOT the default AutoText. Alert text is upstream
-              // data and the feed ships an `en-html` translation of every
-              // string it sends; AutoText would RENDER markup that reached
-              // here rather than show it. Gtfs.js selects the `en` translation
-              // by language, and this is the half that does not depend on it.
-              textFormat: Text.PlainText
-              font.pixelSize: Style.font.caption
-              text: alertRow.modelData.headerText
-              color: alertRow.cls === "red" ? Model.COLOR_ERROR
-                   : alertRow.cls === "amber" ? Model.COLOR_WARN
-                   : root.barForeground
-              opacity: alertRow.cls === "info" || alertRow.cls === "planned"
-                       ? 0.6 : 1.0
+              // Zero, because every run carries its own leading gap. Uniform
+              // spacing here is exactly what detaches punctuation from its
+              // bullet -- "[SIR]," would render as "SIR , see below".
+              spacing: 0
+              // Applied ONCE, on the container, as the Text it replaces
+              // applied it to itself.
+              opacity: alertRow.runOpacity
+              Repeater {
+                model: alertRow.modelData.headerRuns
+                     && alertRow.modelData.headerRuns.length > 0
+                     ? alertRow.modelData.headerRuns[0] : []
+                delegate: Loader {
+                  required property var modelData
+                  sourceComponent: modelData.t === "r" ? runBulletComp
+                                                       : runWordComp
+                  onLoaded: {
+                    item.run = modelData
+                    if (modelData.t !== "r") item.tint = alertRow.runColor
+                  }
+                }
+              }
             }
           }
 
-          // An invisible layout child is excluded from the layout entirely, so
-          // a collapsed row costs no height rather than an empty gap.
-          Text {
-            visible: alertRow.expanded
+          // `active`, not merely `visible`: a 2000-character alert is roughly
+          // 330 runs, and they should exist while the row is open and not
+          // otherwise. An inactive Loader also contributes no height, so a
+          // collapsed row costs nothing rather than leaving an empty gap.
+          Loader {
+            id: detailLoader
+            active: alertRow.expanded
+            visible: active
             Layout.fillWidth: true
+            // preferredHeight explicitly, NOT left to the implicit size: the
+            // Column's height depends on the Flows' wrapping, which depends on
+            // the width the layout hands down, which would depend back on the
+            // Column's implicit height. Naming it breaks that loop.
+            Layout.preferredHeight: (active && item) ? item.implicitHeight : 0
             // Starts under the first letter of the headline, not under the
             // bullet: the bullet's own diameter plus the row's spacing. An
             // alert with no attributable route draws no bullet and its
@@ -400,12 +488,38 @@ Panel {
             Layout.leftMargin: alertRow.modelData.matchedRoute !== ""
                              ? Style.font.caption * 1.4 + Style.space(4)
                              : 0
-            wrapMode: Text.WordWrap
-            textFormat: Text.PlainText
-            font.pixelSize: Style.font.caption
-            text: alertRow.detail
-            color: root.barForeground
-            opacity: 0.75
+            sourceComponent: Column {
+              width: detailLoader.width
+              spacing: 0
+              // The body stays lighter than the headline, as it ships. Applied
+              // here and nowhere else, for the reason on runOpacity.
+              opacity: 0.75
+              Repeater {
+                model: alertRow.modelData.descriptionRuns
+                delegate: Flow {
+                  required property var modelData
+                  width: parent.width
+                  spacing: 0
+                  // A blank line survives as a line-height spacer. An empty
+                  // Flow is zero high, which is how a paragraph break gets
+                  // lost.
+                  height: modelData.length === 0 ? spaceMetrics.height
+                                                 : implicitHeight
+                  Repeater {
+                    model: parent.modelData
+                    delegate: Loader {
+                      required property var modelData
+                      sourceComponent: modelData.t === "r" ? runBulletComp
+                                                           : runWordComp
+                      // No tint: the description keeps the component's
+                      // default, root.barForeground, which is what the
+                      // description Text used. Severity colours the headline.
+                      onLoaded: item.run = modelData
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
