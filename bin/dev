@@ -196,7 +196,7 @@ up() {
   # declares it and `enable` honours it, so a down/up cycle restores the widget
   # unaided. Passing one on every `up` would overwrite a hand-moved position.
   run omarchy plugin enable "$DEV_ID"
-  run omarchy restart shell
+  restart_shell
   (( DRY_RUN )) || {
     echo "up -> $DEST"
     echo "  id: $DEV_ID   toggle: omarchy-shell shell toggle $DEV_ID"
@@ -269,6 +269,60 @@ wait_for_registration() {
   done
 }
 
+# Whether the shell is back, after a restart that claims to have restarted it.
+#
+# The restart is fire-and-forget in the same way rescanPlugins is, and worse:
+# omarchy-restart-shell kills the running instance and then launches a
+# replacement, and the launch can win that race. Observed twice on 2026-09-22
+# -- the replacement logged "An instance of this configuration is already
+# running", the old instance then exited on the IPC request it had already
+# been given, and nothing was left running. `up` exited 0 and printed its
+# success lines over a dead desktop, which is what made it hard to catch; a
+# clean exit leaves no coredump to find either. See issue #14.
+#
+# The race is upstream, in a package-managed file this repo must not edit, so
+# what is guarded here is the OUTCOME rather than the mechanism: ask the shell
+# whether it is back, and say so plainly when it is not.
+#
+# Ping rather than `pgrep`: a process that is up but not yet answering IPC is
+# not back yet, and the next thing up() does is talk to it over IPC.
+#
+# DEV_SHELL_TIMEOUT overrides the timeout below, in seconds; test-only, unset
+# in normal use, in the same spirit as DEV_WAIT_TIMEOUT.
+wait_for_shell() {
+  local timeout="${DEV_SHELL_TIMEOUT:-20}" interval=0.2
+  # interval is 0.2s, i.e. 5 iterations per second of $timeout.
+  local max_iters=$(( timeout * 5 ))
+  local iter=0
+  while ! omarchy-shell shell ping >/dev/null 2>&1; do
+    (( iter >= max_iters )) && return 1
+    sleep "$interval"
+    # Not `(( iter++ ))`, for the reason spelled out in wait_for_registration.
+    iter=$(( iter + 1 ))
+  done
+}
+
+# Restarts the shell, and makes sure it actually came back.
+#
+# ONE retry, not a loop: the failure is a race, so losing it twice running is
+# unlikely enough that a second attempt is worth more than the thrash a loop
+# would cause against a shell that is still tearing down. Two attempts and
+# then a clear error beats an unattended restart storm.
+#
+# Every branch is an explicit `if` rather than `cmd && return`: under `set -e`
+# a trailing `&&` list that evaluates false is a failing command, which would
+# kill the script silently -- the same shape as the `(( iter++ ))` trap.
+restart_shell() {
+  run omarchy restart shell
+  if (( DRY_RUN )); then return 0; fi
+  if wait_for_shell; then return 0; fi
+  echo "dev: the shell did not come back; restarting it again" >&2
+  run omarchy restart shell
+  wait_for_shell ||
+    fail "the shell is not answering after two restarts -- run: omarchy restart shell"
+}
+
+
 down() {
   # Captured into a variable first, not inlined as `case "$(plugin_state)"`:
   # that would put plugin_state's own fail() call inside the case word's
@@ -306,7 +360,7 @@ down() {
   # $DEST is deliberately left in place: it preserves the dev copy's settings,
   # and rsync --delete already makes the next `up` idempotent over it.
   run omarchy plugin disable "$DEV_ID"
-  run omarchy restart shell
+  restart_shell
 }
 
 status() {
