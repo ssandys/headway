@@ -823,3 +823,26 @@ test("no single-character route id survives into display text, across the fixtur
   }
   assert.deepEqual([...leftover], [], "a bare route id still reaching the panel as text")
 })
+
+test("bulletLabelSize leaves a one-character bullet exactly as it ships", () => {
+  // Every bullet in the bar, the arrival rows and the saved list is one
+  // character. This is a repair to the case nobody has looked at, not a
+  // restyle of the case everybody sees -- so this number must not move.
+  assert.equal(Model.bulletLabelSize(20, "6"), 20 * 0.62)
+  assert.equal(Model.bulletLabelSize(18, "A"), 18 * 0.62)
+})
+
+test("bulletLabelSize shrinks a three-character label to fit the disc", () => {
+  // SIR is on 21 stations. At 0.62 the three glyphs need about 1.1x the
+  // disc's width, which is the overflow visible in the station list today.
+  const d = 20
+  const size = Model.bulletLabelSize(d, "SIR")
+  assert.ok(size < d * 0.62, "must be smaller than the one-character size")
+  assert.ok(3 * 0.6 * size <= d * 0.8 + 0.001,
+    "three monospace advances must fit the usable chord across the disc")
+})
+
+test("bulletLabelSize survives an empty or missing label", () => {
+  assert.equal(Model.bulletLabelSize(20, ""), 20 * 0.62)
+  assert.equal(Model.bulletLabelSize(20, undefined), 20 * 0.62)
+})

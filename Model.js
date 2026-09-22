@@ -379,6 +379,26 @@ var ROUTE_COLORS = {
 // unrecognised route.
 var ROUTE_COLOR_FALLBACK = "#6E7681"
 
+// The label's pixel size for a bullet of this diameter.
+//
+// Lives here rather than in RouteBullet.qml for the reason the colours do:
+// colour and text colour both come from this file so they are unit-tested
+// rather than hand-picked per call site. The size is the same kind of
+// decision, and it is the only way the SIR case gets a test at all.
+//
+// 0.62 is what every bullet has always used and what every one-character
+// bullet keeps. The second term is the fit: 0.6 is a monospace glyph's advance
+// as a fraction of its pixel size, and 0.8 * diameter is the usable chord
+// across a disc, so `label.length` glyphs fit within it. SIR lands at
+// 0.44 * diameter; one or two characters are unchanged, because the cap wins.
+function bulletLabelSize(diameter, label) {
+  var len = label ? label.length : 1
+  if (len < 1) len = 1
+  var fitted = (diameter * 0.8) / (0.6 * len)
+  var capped = diameter * 0.62
+  return fitted < capped ? fitted : capped
+}
+
 function routeColor(id) {
   // normalizeRoute first, so 6X resolves to the 6's green rather than falling
   // through to the fallback -- otherwise every express train looks unknown.
@@ -607,6 +627,7 @@ if (typeof module !== "undefined") {
     COLOR_ERROR: COLOR_ERROR,
     ROUTE_COLOR_FALLBACK: ROUTE_COLOR_FALLBACK,
     routeColor: routeColor,
+    bulletLabelSize: bulletLabelSize,
     routeTextColor: routeTextColor,
     formatCountdown: formatCountdown,
     badgeText: badgeText,
