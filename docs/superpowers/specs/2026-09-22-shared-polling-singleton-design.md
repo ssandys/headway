@@ -95,7 +95,7 @@ and a half-typed station search belongs to the panel it was typed into.
 | Panel-open signal | A count, not a bool | With N panels, "open" means any of them. A bool would make the last writer win. |
 | Refcount | Explicit, and clamped at zero | Polling must stop when the last widget goes, and a drifting count would poll forever. `Metrics` clamps with `Math.max(0, …)`; so does this. |
 | Per-panel UI state | Stays in `Panel.qml` | Expansion and search text belong to the surface they happened on. |
-| Verification | A headless second output | It is the only way to observe a second bar surface on a one-monitor machine. Reasoning about it is what left three duplications in place for five releases. |
+| Verification | Two plugin instances first, a headless output second | Running the dev copy beside the installed one puts two widgets on one screen and needs no compositor support — found by accident when both were left enabled. The headless output is the faithful version, because it also exercises surface creation and teardown. Either beats reasoning about it, which is what left three duplications in place for five releases. |
 
 ## Risks
 
