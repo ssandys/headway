@@ -13,7 +13,7 @@ happened on this branch, not advice.
 | `Model.js` | Arrival assembly, alert classification, bar state, all display formatting, and alert text as layout runs (`alertRuns`) for Panel.qml to lay out | same |
 | `Fetch.js` | The curl argv, the error text a curl exit code becomes, and how long to wait after a failed poll | same |
 | `State.js` | The saved-stations file: the argv that reads and writes it, what its contents are allowed to be (`validStation`, `parseState`), and what a failed write cost the user | same |
-| `Service.qml` | I/O only: `curl` polling, shell-mediated state file, `notify-send` | **The live shell only** |
+| `Service.qml` | I/O only, and a SINGLETON shared by every bar surface: `curl` polling, shell-mediated state file, `notify-send`. One of each, however many monitors | **The live shell only** |
 | `Panel.qml` | Rendering only: the bar button, its badge, the panel | **The live shell only** |
 | `RouteBullet.qml` | One MTA route bullet — disc for local, diamond for express | **The live shell only** |
 

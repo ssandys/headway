@@ -237,29 +237,15 @@ start, so a corrupt file looks like lost stations rather than an error.
 
 ## Known limitations
 
-- **One poll per monitor.** The Omarchy bar instantiates a widget once per bar
-  surface, and a bar surface exists per monitor — so on a two-monitor setup
-  Headway fetches the feeds twice per interval, on three monitors three times.
-  Neither galley nor colophon coordinates across instances either (verified:
-  their poll timers run unconditionally per instance), so this is the house
-  behaviour rather than a Headway bug. It matters slightly more here because
-  those two poll local services while this one polls the MTA over the network.
-  The volume is small — riding only the L is 23 KB per fetch — but it is real,
-  and worth knowing before running Headway on a wall of monitors.
-- **Distances are always miles.** Not yet a setting.
-- **Subway only.** No LIRR, Metro-North or bus. Bus additionally needs an API
-  key.
-- **No leave-now notifications.** This needs a per-station walking time. It is
-  the most likely first addition, and the one that would make the widget
-  actively useful rather than merely informative.
-- **No train positions or map**, though the vehicle positions are in the same
-  feeds.
-- **No trip planning** between two saved stations.
-- **No express-versus-local filter.** Headway recognises `6X`/`7X` so express
-  trains are never silently dropped, and marks them with a diamond, but
-  choosing to see only expresses is not a control.
-- **Next arrivals, not a timetable.**
-- **Alerts show `header_text`,** not the long `description_text`.
+- **One poll for every monitor, not one per monitor.** The Omarchy bar
+  instantiates a widget once per bar surface, and a surface exists per monitor
+  — so a widget that polls from inside itself polls once per monitor, notifies
+  once per monitor, and writes its state file once per monitor with nothing
+  ordering the writes. `Service.qml` is a QML singleton for exactly that
+  reason: one poll, one notification and one writer however many screens you
+  have. Measured with a headless second output rather than assumed.
+  `docs/shared-state-in-omarchy-plugins.md` has the portable version, since
+  galley, colophon and tonearm all still have this.
 
 ## Uninstall
 
