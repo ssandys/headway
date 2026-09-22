@@ -291,6 +291,80 @@ function alertDisplayText(text) {
   return alertTextWithRouteGlyphs(alertTextWithIcons(text))
 }
 
+// One alert string as lines of word-level runs, for a Flow to lay out.
+//
+// Word-level because a Text inside a Flow needs an explicit width to wrap, and
+// wrapMode does not constrain one -- so the Flow has to do the wrapping, which
+// means it needs items to wrap. The 2000-character cap applied at decode bounds
+// this at roughly 330 runs for the longest alert the feed can produce.
+//
+// `sp` rides on the run rather than coming from Flow.spacing, which is uniform:
+// with uniform spacing "[SIR]," renders as "SIR , see below". Punctuation is
+// split off the id and marked sp:false so it hugs the bullet it belongs to.
+//
+// A route run carries the FEED's id -- "6X", not "6". RouteBullet normalizes
+// for the label and picks disc or diamond, exactly as it does at the row head.
+var ROUTE_TRAIL = ",.:;)?!"
+// NOT "[". Stripping the opening bracket as leading punctuation would leave
+// "6]", which is not a bracketed id, so every route in the feed would come back
+// out as plain text having looked like the tokenizer worked.
+var ROUTE_LEAD = "(\"'"
+
+// "[6]" -> "6", "[SIR]" -> "SIR", anything else -> "". One to three characters
+// of A-Z or 0-9 between brackets, and nothing else.
+function bracketedRouteId(word) {
+  if (word.length < 3 || word.charAt(0) !== "[") return ""
+  if (word.charAt(word.length - 1) !== "]") return ""
+  var id = word.substring(1, word.length - 1)
+  if (id.length < 1 || id.length > 3) return ""
+  for (var i = 0; i < id.length; i++) {
+    var c = id.charAt(i)
+    if (!((c >= "A" && c <= "Z") || (c >= "0" && c <= "9"))) return ""
+  }
+  return id
+}
+
+// Splits one space-delimited word into runs. `sp` applies to the first of them;
+// everything after it hugs what precedes it.
+function wordRuns(word, sp, out) {
+  var lead = ""
+  while (word.length > 0 && ROUTE_LEAD.indexOf(word.charAt(0)) >= 0) {
+    lead = lead + word.charAt(0)
+    word = word.substring(1)
+  }
+  var trail = ""
+  while (word.length > 0 && ROUTE_TRAIL.indexOf(word.charAt(word.length - 1)) >= 0) {
+    trail = word.charAt(word.length - 1) + trail
+    word = word.substring(0, word.length - 1)
+  }
+  var id = bracketedRouteId(word)
+  if (id === "") {
+    // Not a route after all, so that punctuation was never punctuation --
+    // put the word back together and emit it whole.
+    out.push({ t: "s", v: lead + word + trail, sp: sp })
+    return
+  }
+  if (lead !== "") out.push({ t: "s", v: lead, sp: sp })
+  out.push({ t: "r", v: id, sp: lead === "" ? sp : false })
+  if (trail !== "") out.push({ t: "s", v: trail, sp: false })
+}
+
+function alertRuns(text) {
+  if (!text || typeof text !== "string") return []
+  var lines = alertTextWithIcons(text).split("\n")
+  var out = []
+  for (var i = 0; i < lines.length; i++) {
+    var words = lines[i].split(" ")
+    var runs = []
+    for (var j = 0; j < words.length; j++) {
+      if (words[j] === "") continue
+      wordRuns(words[j], runs.length > 0, runs)
+    }
+    out.push(runs)
+  }
+  return out
+}
+
 // alertsFor, plus the route each alert belongs to, ordered by the rider's own
 // route order rather than the feed's.
 //
@@ -642,6 +716,7 @@ if (typeof module !== "undefined") {
     tooltipText: tooltipText,
     alertTextWithIcons: alertTextWithIcons,
     alertTextWithRouteGlyphs: alertTextWithRouteGlyphs,
-    alertDisplayText: alertDisplayText
+    alertDisplayText: alertDisplayText,
+    alertRuns: alertRuns
   }
 }

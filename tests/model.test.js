@@ -846,3 +846,117 @@ test("bulletLabelSize survives an empty or missing label", () => {
   assert.equal(Model.bulletLabelSize(20, ""), 20 * 0.62)
   assert.equal(Model.bulletLabelSize(20, undefined), 20 * 0.62)
 })
+
+// ---------------------------------------------------------------------------
+// Alert text as runs (issue #6)
+//
+// Word-level, because a Text inside a Flow needs an explicit width to wrap and
+// CONTRIBUTING is explicit that wrapMode does not constrain one. Spacing rides
+// on each run rather than on Flow.spacing, or "[SIR]," renders as "SIR ,".
+
+const runText = (v, sp) => ({ t: "s", v: v, sp: sp })
+const runRoute = (v, sp) => ({ t: "r", v: v, sp: sp })
+
+test("alertRuns splits a line into words, marking which ones follow a space", () => {
+  assert.deepEqual(Model.alertRuns("No trains"), [
+    [runText("No", false), runText("trains", true)]
+  ])
+})
+
+test("alertRuns turns a bracketed route id into a route run", () => {
+  assert.deepEqual(Model.alertRuns("No [6] between"), [
+    [runText("No", false), runRoute("6", true), runText("between", true)]
+  ])
+})
+
+test("alertRuns keeps trailing punctuation against its bullet", () => {
+  // The defect the spike had: with uniform Flow spacing this renders as
+  // "SIR , see below", and the spike's tokenizer dropped the comma entirely.
+  assert.deepEqual(Model.alertRuns("the [SIR], see"), [
+    [runText("the", false), runRoute("SIR", true),
+     runText(",", false), runText("see", true)]
+  ])
+})
+
+test("alertRuns splits leading punctuation off a route id too", () => {
+  // The bracket itself is NOT leading punctuation. Stripping it would leave
+  // "6]", which is not a bracketed id, and every route in the feed would come
+  // back out as plain text having looked like it worked.
+  assert.deepEqual(Model.alertRuns("take ([6])"), [
+    [runText("take", false), runText("(", true),
+     runRoute("6", false), runText(")", false)]
+  ])
+})
+
+test("alertRuns carries the feed's id, express marker and all", () => {
+  // RouteBullet normalizes for the label and decides disc versus diamond,
+  // exactly as it does at the row head. Stripping the X here would throw away
+  // the one thing the circled glyphs could never express.
+  assert.deepEqual(Model.alertRuns("[6X] and [SIR]"), [
+    [runRoute("6X", false), runText("and", true), runRoute("SIR", true)]
+  ])
+})
+
+test("alertRuns does not mistake ordinary bracketed words for routes", () => {
+  ;["[icon]", "[6789]", "[]", "[a]"].forEach(function (word) {
+    const runs = Model.alertRuns("x " + word)
+    assert.equal(runs[0][1].t, "s", word + " must stay text")
+    assert.equal(runs[0][1].v, word)
+  })
+})
+
+test("alertRuns gives a blank line an empty array, so it can be a spacer", () => {
+  // An empty Flow collapses to zero height, which is how the spike lost the
+  // paragraph break. The line has to survive as something the panel can size.
+  assert.deepEqual(Model.alertRuns("a\n\nb"), [
+    [runText("a", false)],
+    [],
+    [runText("b", false)]
+  ])
+})
+
+test("alertRuns collapses a run of spaces into one gap, not empty runs", () => {
+  assert.deepEqual(Model.alertRuns("a   b"), [
+    [runText("a", false), runText("b", true)]
+  ])
+})
+
+test("alertRuns substitutes icons before tokenizing, so a glyph rides in a word", () => {
+  const out = Model.alertRuns("[shuttle bus icon] Free")
+  assert.equal(out[0][0].t, "s")
+  assert.equal(out[0][0].v.codePointAt(0), 0xF207, "the glyph, not the placeholder")
+})
+
+test("alertRuns returns nothing for an absent or non-string input", () => {
+  assert.deepEqual(Model.alertRuns(""), [])
+  assert.deepEqual(Model.alertRuns(undefined), [])
+  assert.deepEqual(Model.alertRuns(null), [])
+  assert.deepEqual(Model.alertRuns(42), [])
+})
+
+test("alertRuns round-trips every alert in the fixture without losing a character", () => {
+  // THE test. The spike's tokenizer silently ate a comma, and nothing it
+  // rendered looked wrong enough to notice. Reassembling the runs must
+  // reproduce the icon-substituted input exactly, modulo runs of spaces
+  // collapsing -- which is the only thing tokenizing is allowed to change.
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  let checked = 0
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      if (!s) continue
+      const rebuilt = Model.alertRuns(s)
+        .map((line) => line
+          .map((r) => (r.sp ? " " : "") + (r.t === "r" ? "[" + r.v + "]" : r.v))
+          .join(""))
+        .join("\n")
+      const expected = Model.alertTextWithIcons(s).split("\n")
+        .map((line) => line.split(" ").filter((w) => w !== "").join(" "))
+        .join("\n")
+      assert.equal(rebuilt, expected, "lost text in: " + JSON.stringify(s.slice(0, 80)))
+      checked++
+    }
+  }
+  assert.equal(checked, 389, "both strings of all 195 alerts, one of which has no description")
+})
