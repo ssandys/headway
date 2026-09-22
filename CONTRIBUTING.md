@@ -185,12 +185,28 @@ omarchy plugin validate .  # manifest gate -- NOT a QML gate, see the traps
 node scripts/collect.mjs   # print the snapshot the widget works from
 ```
 
-`bin/dev` and `bin/dev-watch` are copied **byte-identical** from galley and
-derive plugin identity from `manifest.json` at runtime. That portability is what
-lets them move to the next plugin unedited, and
-`tests/manifest.test.js` guards it by asserting neither script contains a
-plugin-specific literal outside a comment. If you hardcode an id there, that
-test fails — correctly.
+`bin/dev` and `bin/dev-watch` came from galley and derive plugin identity from
+`manifest.json` at runtime. That portability is what lets them move to the next
+plugin unedited, and `tests/manifest.test.js` guards it by asserting neither
+script contains a plugin-specific literal outside a comment. If you hardcode an
+id there, that test fails — correctly.
+
+They are **not** byte-identical to galley's any more, and nothing checks that
+they are, so do not assume it:
+
+- `bin/dev-watch` is identical, as of 2026-09-22.
+- `bin/dev` differs in two ways. One rsync `--exclude` names this repo's
+  `AGENTS.md` where galley's names `ARCHITECTURE.md` — per-repo packaging, not
+  drift. The rest is the restart guard added for issue #14, which galley,
+  colophon and tonearm all still need: `omarchy restart shell` can lose a race
+  with itself and leave no shell running, and without the guard `up` exits 0
+  and prints its success lines over a dead desktop.
+
+galley also carries a 628-line `tests/test_dev.py` that drives this script
+through PATH shims. That file does not exist here — the comments inside
+`bin/dev` refer to it because they were written there. This repo's equivalent
+is `tests/dev.test.js`, which covers the restart guard in node rather than
+pytest.
 
 Note that `bin/dev` rewrites the display name in the **deployed** copy, so the
 running panel reads `Headway (dev)`. That is why `preview.png` was captured
