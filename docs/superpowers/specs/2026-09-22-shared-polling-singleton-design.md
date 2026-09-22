@@ -1,7 +1,7 @@
 # One polling service across every bar surface — Design
 
 **Date:** 2026-09-22
-**Status:** Implemented at `c588ab0`; partially measured — see Measured
+**Status:** Implemented at `c588ab0`; verified on two monitors — see Measured on two real monitors
 **Issue:** [#3](https://github.com/ssandys/headway/issues/3)
 
 The bar instantiates a widget once per bar surface, and a surface exists per
@@ -188,21 +188,13 @@ would report "1 or fewer" too.
 
 ## Not yet measured
 
-**Two checks remain**, and the change should not be described as verified until
-they do. Both want two real monitors, which is where they are being taken.
-
-Set up: `./bin/dev up`, and disable the released `ssandys.headway` first
-(`omarchy plugin disable ssandys.headway`) or its unfixed copy polls alongside
-the dev one and every count is off by its contribution. Watch out for #14 while
-doing it — `bin/dev up` can leave the shell dead, silently, and
-`omarchy restart shell` is the recovery.
+**One check remains.** See "Measured on two real monitors" below for the rest.
 
 - ~~**Refcount drift across reloads.**~~ **Measured and closed** — see below.
-- **One notification rather than two.** No new alert arrived during the
-  measurement window, and the stale path was not forced.
-- **Per-surface state staying per-surface.** Confirming that a row expanded on
-  one surface does not expand on the other needs two panels open and someone
-  looking at both.
+- **One notification rather than two.** Still not measured, and deliberately
+  abandoned rather than pursued — see below.
+- ~~**Per-surface state staying per-surface.**~~ **Confirmed** on two monitors:
+  expanding an alert row on one screen left the other screen's row collapsed.
 
 ## An unrelated bug found while measuring
 
@@ -265,3 +257,49 @@ Two details worth keeping:
 - The steady state of 2 was **two bar surfaces**, not two widgets on one
   screen: a stray `HEADLESS-2` output was present for the whole test. One
   widget per surface, exactly as expected. Removed afterwards.
+
+
+## Measured on two real monitors, 2026-09-22
+
+eDP-1 and DP-7, both carrying a bar with the widget (confirmed by capturing
+each bar). Only one build enabled at a time — the released copy must be
+disabled or its unfixed `Service` polls alongside the dev one and every count
+is off by its contribution.
+
+**The metric had to change.** Counting *concurrent* fetches worked with a
+headless output, because both surfaces were created in the same instant and
+their timers ran in phase. Real monitors are attached at different times: eDP-1
+and DP-7 poll about 20 seconds apart, so two pollers never overlap and
+"concurrent" reads 1 whether the fix is in or not. The honest metric is
+**distinct fetch PIDs over a fixed window**.
+
+| build | alerts fetches | trip fetches | total in ~200s |
+|---|---|---|---|
+| released v0.2.0, no singleton | 2 | 5 | **7** |
+| released v0.2.0, second run | 2 | 5 | **7** |
+| this branch, singleton | **1** | 2 | **3** |
+
+The alerts feed is the decisive column. Its interval is 300s, so over a 200s
+window each *surface* fetches it exactly once: two surfaces give two, one
+shared service gives one. That is the whole claim, measured.
+
+**Per-surface state** was confirmed by hand: an alert row expanded on one
+screen left the other screen's row collapsed, so `expandedAlertId` and `query`
+are still per-surface and did not follow the service into the singleton.
+
+## Why the notification count was abandoned
+
+Forcing it means breaking the feed for longer than `staleAfterSec` — the deployed
+copy's `FEED_BASE` pointed at an unreachable host — and waiting about four
+minutes with `dbus-monitor` counting `Notify` calls.
+
+The attempt was stopped because **live-testing this cost the user their bar
+twice**, both times through #14: the edit triggers a hot reload, the reload
+path restarts the shell, and the restart races itself into leaving nothing
+running. The measurement is worth less than a working desktop.
+
+It is left to opportunity instead. A real alert on a saved route fires the
+notification in normal use; one rather than two confirms it at no risk. The
+mechanism is also not in doubt in the way the fetch count was — the same single
+`Service` that now performs one alerts fetch owns `notify()`, and there is no
+second instance left to duplicate it.
