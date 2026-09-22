@@ -390,6 +390,13 @@ function alertsForDisplay(routes, alerts, nowSec) {
       // never reaches Panel.qml however well Gtfs.js decoded it.
       headerText: alertDisplayText(a.headerText),
       descriptionText: alertDisplayText(a.descriptionText),
+      // ADDITIVE. The strings above are untouched and still fully substituted;
+      // these are what Panel.qml lays out as a Flow of words and bullets.
+      // Keeping both means the runs can be reverted without anything
+      // downstream changing with them, and it keeps one string from having
+      // three variants in circulation.
+      headerRuns: alertRuns(a.headerText),
+      descriptionRuns: alertRuns(a.descriptionText),
       routes: a.routes, periods: a.periods,
       matchedRoute: matchedRouteOf(mine, a)
     })

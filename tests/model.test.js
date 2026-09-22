@@ -960,3 +960,20 @@ test("alertRuns round-trips every alert in the fixture without losing a characte
   }
   assert.equal(checked, 389, "both strings of all 195 alerts, one of which has no description")
 })
+
+test("alertsForDisplay carries runs beside the strings, changing neither", () => {
+  // Purely additive. Three variants of one string in circulation is how a
+  // reader ends up unable to say which one a surface shows -- and if the Flow
+  // rendering is ever reverted, the delegate falls back to a Text on a string
+  // that still reads correctly.
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "No [6] between Hunts Point Av",
+    descriptionText: "[shuttle bus icon] Free T102 buses" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)[0]
+
+  assert.equal(out.headerText, "No " + CIRCLED_6 + " between Hunts Point Av",
+    "the string keeps its circled glyph, exactly as it ships")
+  assert.equal(out.headerRuns[0][1].t, "r")
+  assert.equal(out.headerRuns[0][1].v, "6")
+  assert.equal(out.descriptionRuns[0][0].v.codePointAt(0), 0xF207)
+})
