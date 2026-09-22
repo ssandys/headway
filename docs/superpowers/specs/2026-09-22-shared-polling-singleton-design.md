@@ -1,7 +1,7 @@
 # One polling service across every bar surface — Design
 
 **Date:** 2026-09-22
-**Status:** Awaiting review
+**Status:** Implemented at `c588ab0`; partially measured — see Measured
 **Issue:** [#3](https://github.com/ssandys/headway/issues/3)
 
 The bar instantiates a widget once per bar surface, and a surface exists per
@@ -154,3 +154,71 @@ Checks, in order:
   as part of the work, not left for later.
 - Any change to what is fetched, how it is decoded, or how alerts are
   classified.
+
+
+## Measured, 2026-09-22
+
+Observed numbers, not expected ones.
+
+**The gate (does a plugin singleton resolve, and is it shared?).** A throwaway
+`Probe.qml` with an `Item` root logged `marker=probe-resolved attaches=1` on
+load — so a plugin `qmldir` does resolve under this shell's loader, and an
+`Item` root works as a singleton. Creating a second bar surface with
+`hyprctl output create headless` took it to `attaches=2` **on the same object**,
+which is both halves of the gate: the type resolves, and two surfaces share one
+instance rather than getting one each.
+
+That also measured the premise the issue was filed on. The attach count going
+1 → 2 when a monitor appears *is* the duplication.
+
+**Concurrent fetches to `api-endpoint.mta.info`**, sampled at 0.2s against the
+shell's `curl` children, two bar surfaces throughout:
+
+| condition | concurrent |
+|---|---|
+| Unfixed code, two surfaces | **2** (and 4 momentarily, while two shells overlapped during a restart) |
+| Installed copy (unfixed) and dev copy (singleton) both enabled | **3** — which is 2 + 1, each copy contributing its own |
+| Dev copy alone, singleton, two surfaces | **1** |
+
+The middle row is the useful one: it shows the two copies' contributions
+separately in a single sample, so the singleton's "1" is not an artefact of a
+quiet interval. A non-zero hit count in the third run also rules out the
+confound that would otherwise make this worthless — a widget that never polled
+would report "1 or fewer" too.
+
+## Not yet measured
+
+Three of the plan's checks did not happen, and the change should not be
+described as verified until they do.
+
+- **Refcount drift across reloads.** Running `./bin/dev up` three times in
+  quick succession killed the shell before anything could be observed — see
+  below. Whether `consumers` returns to the number of live surfaces after a
+  reload is still unknown, and it is the failure mode that would keep polling
+  forever after every widget is gone.
+- **One notification rather than two.** No new alert arrived during the
+  measurement window, and the stale path was not forced.
+- **Per-surface state staying per-surface.** Confirming that a row expanded on
+  one surface does not expand on the other needs two panels open and someone
+  looking at both.
+
+## An unrelated bug found while measuring
+
+`bin/dev up` can leave the shell dead. The journal shows the replacement
+launching before the old one has exited:
+
+```
+omarchy-shell[2016332]: An instance of this configuration is already running.
+omarchy-shell[2004206]: INFO: Exiting due to IPC request.
+```
+
+The new process refuses to start because the old is still alive, then the old
+exits on the IPC request, and nothing is left running. Reproduced twice —
+once on a single `up`, once on three in a row — with no coredump either time,
+because it is a clean exit rather than a crash. `omarchy restart shell` is the
+recovery.
+
+CONTRIBUTING records that `bin/dev` is copied **byte-identical** from galley and
+derives plugin identity from `manifest.json` at runtime, so this is not
+Headway's bug and not Headway's alone: galley, colophon and tonearm ship the
+same script.
