@@ -187,6 +187,54 @@ function matchedRouteOf(routes, alert) {
   return ""
 }
 
+// The feed writes icons as bracketed words -- "[shuttle bus icon] Free T102
+// shuttle buses make all stops" -- and they reached the panel as literal text.
+//
+// Measured over the committed fixture and the live feed: three tokens and only
+// three, [accessibility icon] (165/180 occurrences), [shuttle bus icon] (74/61)
+// and [airplane icon] (3/1). Small enough to map by hand rather than parse.
+//
+// Nerd Font glyphs rather than Unicode, because there is no non-emoji bus
+// character at all: the codepoints below sit in the same 140-font set that
+// supplies BAR_GLYPH, which this widget already renders. Built with
+// fromCodePoint, never typed, for exactly the reason BAR_GLYPH is -- a literal
+// private-use character does not survive every editing path, and the failure
+// here would be an invisible tofu box with nothing logged.
+//
+// Route ids in the same bracket syntax ([4], [6X]) are deliberately NOT
+// substituted. They outnumber the icons five to one, and the circled forms
+// lose the colour and the express diamond that make an MTA bullet readable --
+// see issue #6, where that is a separate decision.
+//
+// This runs on the way to the PANEL and the TOOLTIP, both of which render in
+// the bar's own font stack. The desktop notification in Service.qml keeps the
+// placeholder words: notify-send hands the text to a notification daemon whose
+// font is not ours to choose, and a tofu box there is worse than the words.
+var ALERT_ICONS = {
+  "[accessibility icon]": String.fromCodePoint(0xF193),
+  "[shuttle bus icon]": String.fromCodePoint(0xF207),
+  "[airplane icon]": String.fromCodePoint(0xF072)
+}
+
+// Substitution only ever SHORTENS -- twenty characters become one -- so the
+// 2000-character cap Gtfs.js applies at decode still holds afterwards and
+// nothing downstream needs to re-bound anything.
+//
+// split/join rather than a regex: `[` and `]` are regex metacharacters, and a
+// hand-escaped pattern is a bug waiting to be introduced for no gain at all.
+function alertTextWithIcons(text) {
+  if (!text || typeof text !== "string") return ""
+  var out = text
+  for (var token in ALERT_ICONS) {
+    // A bare for-in walks the prototype chain, so an inherited member would be
+    // read as one more token to substitute.
+    if (!Object.prototype.hasOwnProperty.call(ALERT_ICONS, token)) continue
+    if (out.indexOf(token) < 0) continue
+    out = out.split(token).join(ALERT_ICONS[token])
+  }
+  return out
+}
+
 // alertsFor, plus the route each alert belongs to, ordered by the rider's own
 // route order rather than the feed's.
 //
@@ -207,10 +255,11 @@ function alertsForDisplay(routes, alerts, nowSec) {
   for (var i = 0; i < live.length; i++) {
     var a = live[i]
     out.push({
-      id: a.id, alertType: a.alertType, headerText: a.headerText,
+      id: a.id, alertType: a.alertType,
       // Named by hand because this is a FRESH object: a field left out here
       // never reaches Panel.qml however well Gtfs.js decoded it.
-      descriptionText: a.descriptionText,
+      headerText: alertTextWithIcons(a.headerText),
+      descriptionText: alertTextWithIcons(a.descriptionText),
       routes: a.routes, periods: a.periods,
       matchedRoute: matchedRouteOf(mine, a)
     })
@@ -473,7 +522,10 @@ function tooltipText(snapshot, nowSec) {
   for (var i = 0; i < live.length; i++) {
     var cls = classifyAlert(live[i].alertType)
     if (cls === "red" || cls === "amber") {
-      return head + " - " + (live[i].headerText || live[i].alertType)
+      // Iconised for the same reason the panel's copy is: one string must not
+      // read as a glyph in one surface and as literal words in the other.
+      return head + " - " +
+             (alertTextWithIcons(live[i].headerText) || live[i].alertType)
     }
   }
   var arrivals = snapshot.arrivals || []
@@ -510,6 +562,7 @@ if (typeof module !== "undefined") {
     alertsForDisplay: alertsForDisplay,
     directionLabelOf: directionLabelOf,
     barState: barState,
-    tooltipText: tooltipText
+    tooltipText: tooltipText,
+    alertTextWithIcons: alertTextWithIcons
   }
 }

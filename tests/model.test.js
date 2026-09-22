@@ -616,3 +616,105 @@ test("alertsForDisplay carries the alert's description through to the panel", ()
   assert.equal(out[0].descriptionText,
     "Take the [4] instead between 125 St and Grand Central.")
 })
+
+// ---------------------------------------------------------------------------
+// Icon placeholders in alert text (issue #6)
+//
+// The feed writes icons as bracketed words, and they reached the panel as
+// literal text: "[shuttle bus icon] Free T102 shuttle buses make all stops
+// between 125 St and Hunts Point Av. Transfer between [6] and [shuttle bus
+// icon] at Hunts Point Av [accessibility icon] and 125 St [accessibility icon]".
+//
+// Measured over the committed fixture and the live feed: three tokens and only
+// three -- [accessibility icon] 165/180, [shuttle bus icon] 74/61, [airplane
+// icon] 3/1. The route ids in the same bracket syntax are deliberately NOT
+// substituted; they are far more common (1382 occurrences against 242) and a
+// circled letter would lose the colour that makes an MTA bullet mean anything.
+//
+// Built from codepoints rather than typed, here as well as in Model.js: these
+// are private-use characters that a copy-paste or an editor round-trip can
+// quietly drop, and the failure would look like a passing test.
+const ICON_ACCESS = String.fromCodePoint(0xF193)
+const ICON_BUS = String.fromCodePoint(0xF207)
+const ICON_PLANE = String.fromCodePoint(0xF072)
+
+test("alertTextWithIcons draws the three placeholders the feed actually sends", () => {
+  assert.equal(Model.alertTextWithIcons("[accessibility icon] ADA station"),
+    ICON_ACCESS + " ADA station")
+  assert.equal(Model.alertTextWithIcons("[shuttle bus icon] Free T102 buses"),
+    ICON_BUS + " Free T102 buses")
+  assert.equal(Model.alertTextWithIcons("[airplane icon] JFK"),
+    ICON_PLANE + " JFK")
+})
+
+test("alertTextWithIcons replaces every occurrence, not just the first", () => {
+  const out = Model.alertTextWithIcons(
+    "Transfer between [6] and [shuttle bus icon] at Hunts Point Av " +
+    "[accessibility icon] and 125 St [accessibility icon]")
+  assert.equal(out.split(ICON_ACCESS).length - 1, 2, "both accessibility icons")
+  assert.equal(out.split(ICON_BUS).length - 1, 1)
+  assert.equal(out.indexOf("["), out.indexOf("[6]"),
+    "the only bracket left standing is the route id")
+})
+
+test("alertTextWithIcons leaves route ids and unknown placeholders alone", () => {
+  const kept = ["[6]", "[6X]", "[SIR]", "[bicycle icon]", "[]",
+                "[accessibility]", "accessibility icon", "[ accessibility icon ]"]
+  kept.forEach(function (k) {
+    assert.equal(Model.alertTextWithIcons("x " + k + " y"), "x " + k + " y", k)
+  })
+})
+
+test("alertTextWithIcons never lengthens the string, so the decode cap still holds", () => {
+  // Gtfs.js bounds both alert strings at 2000 characters BEFORE this runs. A
+  // substitution that grew the text would put it back over that bound with
+  // nothing downstream left to catch it. 20 characters become 1, every time.
+  const text = "[accessibility icon] ".repeat(60) + "[shuttle bus icon]"
+  assert.ok(Model.alertTextWithIcons(text).length < text.length)
+})
+
+test("alertTextWithIcons survives an absent string and a prototype-chain token", () => {
+  assert.equal(Model.alertTextWithIcons(""), "")
+  assert.equal(Model.alertTextWithIcons(undefined), "")
+  assert.equal(Model.alertTextWithIcons(null), "")
+  // The table is iterated, and a bare for-in walks the prototype chain.
+  assert.equal(Model.alertTextWithIcons("[constructor] [__proto__] [toString]"),
+    "[constructor] [__proto__] [toString]")
+})
+
+test("alertsForDisplay hands the panel text with its icons already drawn", () => {
+  const alerts = [{ id: "a", alertType: "Delays", routes: ["6"], periods: [],
+    headerText: "[accessibility icon] lift out of service at 125 St",
+    descriptionText: "[shuttle bus icon] Free T102 buses make all stops" }]
+  const out = Model.alertsForDisplay(["6"], alerts, NOW)
+  assert.equal(out[0].headerText, ICON_ACCESS + " lift out of service at 125 St")
+  assert.equal(out[0].descriptionText, ICON_BUS + " Free T102 buses make all stops")
+})
+
+test("tooltipText draws icons too, because it shows the same headline", () => {
+  // The bar tooltip prints a red or amber alert's headline verbatim. Leaving
+  // it out would put the glyph in the panel and the literal words in the
+  // tooltip, for one and the same string.
+  const s = snap({ alerts: [{ id: "a", routes: ["L"], alertType: "Delays",
+    headerText: "[accessibility icon] lift out at Bedford Av", periods: [] }] })
+  assert.ok(Model.tooltipText(s, NOW).indexOf(ICON_ACCESS) >= 0,
+    "the tooltip should carry the glyph, not the placeholder words")
+})
+
+test("no icon placeholder survives the substitution, across the whole fixture", () => {
+  // The sweep that catches the MTA adding a fourth token. Runs over every
+  // header and description in the committed feed rather than a sample.
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  const leftover = new Set()
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      for (const m of Model.alertTextWithIcons(s).matchAll(/\[([^\]]*icon[^\]]*)\]/gi)) {
+        leftover.add(m[1])
+      }
+    }
+  }
+  assert.deepEqual([...leftover], [],
+    "an unmapped icon placeholder reaches the panel as literal words")
+})
