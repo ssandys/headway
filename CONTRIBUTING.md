@@ -10,7 +10,7 @@ happened on this branch, not advice.
 | `Gtfs.js` | Protobuf primitives, the feed map, `decodeTripUpdates`, `decodeAlerts` | `node --test`, and a headless `qml6` probe |
 | `Stations.js` | The station table's accessors: `byId`, `search`, `directionsFor`, `boroughName`, `parentOf`, `platformId`, haversine | same |
 | `StationData.js` | 496 generated station records. Do not hand-edit | same |
-| `Model.js` | Arrival assembly, alert classification, bar state, all display formatting | same |
+| `Model.js` | Arrival assembly, alert classification, bar state, all display formatting, and alert text as layout runs (`alertRuns`) for Panel.qml to lay out | same |
 | `Fetch.js` | The curl argv, the error text a curl exit code becomes, and how long to wait after a failed poll | same |
 | `State.js` | The argv that reads and writes the saved-stations file, and what a failed write cost the user | same |
 | `Service.qml` | I/O only: `curl` polling, shell-mediated state file, `notify-send` | **The live shell only** |

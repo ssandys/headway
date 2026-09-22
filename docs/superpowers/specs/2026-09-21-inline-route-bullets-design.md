@@ -1,7 +1,7 @@
 # Inline route bullets in alert text — Design
 
 **Date:** 2026-09-21
-**Status:** Awaiting review
+**Status:** Implemented at `6cb506d`
 **Issue:** [#6](https://github.com/ssandys/headway/issues/6) · **Branch:** `issue-6-alert-descriptions`
 
 Alert text carries route ids as bracketed words. `v0.2.0` currently substitutes
