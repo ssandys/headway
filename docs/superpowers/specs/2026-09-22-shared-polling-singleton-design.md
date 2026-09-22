@@ -191,11 +191,7 @@ would report "1 or fewer" too.
 Three of the plan's checks did not happen, and the change should not be
 described as verified until they do.
 
-- **Refcount drift across reloads.** Running `./bin/dev up` three times in
-  quick succession killed the shell before anything could be observed — see
-  below. Whether `consumers` returns to the number of live surfaces after a
-  reload is still unknown, and it is the failure mode that would keep polling
-  forever after every widget is gone.
+- ~~**Refcount drift across reloads.**~~ **Measured and closed** — see below.
 - **One notification rather than two.** No new alert arrived during the
   measurement window, and the stale path was not forced.
 - **Per-surface state staying per-surface.** Confirming that a row expanded on
@@ -222,3 +218,44 @@ CONTRIBUTING records that `bin/dev` is copied **byte-identical** from galley and
 derives plugin identity from `manifest.json` at runtime, so this is not
 Headway's bug and not Headway's alone: galley, colophon and tonearm ship the
 same script.
+
+
+## Refcount drift: measured, and it does not drift
+
+The first attempt at this was **vacuous and is worth recording as such**. The
+plan's recipe was to disable the plugin and watch for orphaned polling, but
+`omarchy plugin enable` registers a plugin without placing the widget on the
+bar — so no widget existed, `attach()` never ran, and the resulting "zero
+fetches" proved nothing at all. A fetch count cannot tell "the refcount
+reached zero" apart from "there was never anything to count".
+
+Replaced with direct instrumentation: a temporary `console.warn` in `attach()`
+and `detach()` printing `consumers` after each change, deployed through
+`./bin/dev up` so the widget is actually placed, then five hot reloads
+triggered by touching the deployed `Panel.qml` — which recreates widgets
+without restarting the shell, the only condition where drift could happen.
+
+Every cycle is identical:
+
+```
+headway-probe: detach -> consumers=1
+headway-probe: detach -> consumers=0     <- reaches zero
+headway-probe: attach -> consumers=1
+headway-probe: attach -> consumers=2
+```
+
+**`consumers` returns to zero on every reload** and its peak never exceeded 2
+across five cycles. So `Component.onDestruction` does fire here, every
+`attach()` gets its `detach()`, and the clamp is belt-and-braces rather than
+load-bearing. The risk is closed.
+
+Two details worth keeping:
+
+- **The new widget attaches before the old detaches.** The count goes to 2
+  before coming back down, so a reload briefly has two widgets registered
+  against one service. Harmless — `shouldRun` only asks whether the count is
+  above zero, which it continuously is — but it does mean the count is not a
+  reliable instantaneous measure of live surfaces during a reload.
+- The steady state of 2 was **two bar surfaces**, not two widgets on one
+  screen: a stray `HEADLESS-2` output was present for the whole test. One
+  widget per surface, exactly as expected. Removed afterwards.
