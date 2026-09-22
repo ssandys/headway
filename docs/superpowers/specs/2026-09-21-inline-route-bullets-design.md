@@ -93,9 +93,11 @@ before it.
    a route run.
 5. A word that is `[ID]` plus trailing punctuation from `,.:;)?!` splits into a
    route run and a text run carrying the punctuation, with `sp:false`.
-6. Leading punctuation from `([{"'` before `[ID]` splits the same way, in
+6. Leading punctuation from `("'` before `[ID]` splits the same way, in
    reverse: a text run carrying the punctuation, then the route run with
-   `sp:false`.
+   `sp:false`. The set deliberately excludes `[` — stripping the opening
+   bracket would leave `6]`, which is not a bracketed id, and every route in
+   the feed would come back out as plain text.
 7. Anything else is a text run, verbatim.
 8. A route run carries the **feed's** id — `6X`, not `6`. `RouteBullet`
    normalizes for the label and decides disc versus diamond, exactly as it does
