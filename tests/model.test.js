@@ -603,3 +603,16 @@ test("alertsForDisplay attributes an express alert to its trunk route", () => {
   assert.equal(out.length, 1, "the alert survives")
   assert.equal(out[0].matchedRoute, "6", "6X normalizes onto the 6")
 })
+
+test("alertsForDisplay carries the alert's description through to the panel", () => {
+  // Issue #6. alertsForDisplay builds a FRESH object per alert rather than
+  // passing the decoded one through, so a field it does not name by hand never
+  // reaches Panel.qml however well Gtfs.js decoded it.
+  const alerts = [
+    { id: "a", alertType: "Delays", routes: ["6"], periods: [], headerText: "six",
+      descriptionText: "Take the [4] instead between 125 St and Grand Central." }
+  ]
+  const out = Model.alertsForDisplay(["6"], alerts, 1000)
+  assert.equal(out[0].descriptionText,
+    "Take the [4] instead between 125 St and Grand Central.")
+})

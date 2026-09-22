@@ -208,6 +208,9 @@ function alertsForDisplay(routes, alerts, nowSec) {
     var a = live[i]
     out.push({
       id: a.id, alertType: a.alertType, headerText: a.headerText,
+      // Named by hand because this is a FRESH object: a field left out here
+      // never reaches Panel.qml however well Gtfs.js decoded it.
+      descriptionText: a.descriptionText,
       routes: a.routes, periods: a.periods,
       matchedRoute: matchedRouteOf(mine, a)
     })

@@ -299,17 +299,64 @@ function decodeTripUpdates(bytes) {
 }
 
 // Alert.active_period=1 (TimeRange.start=1, end=2), informed_entity=5
-// (EntitySelector.route_id=2), header_text=10 (TranslatedString.translation=1,
-// Translation.text=1), and the MTA Mercury extension at 1001 whose sub-field 3
-// is alert_type.
+// (EntitySelector.route_id=2), header_text=10 and description_text=11 (both
+// TranslatedString.translation=1, Translation.text=1, language=2), and the MTA
+// Mercury extension at 1001 whose sub-field 3 is alert_type.
 //
 // Alert.effect(7) and Alert.cause(6) are NOT read: they are populated on zero
 // alerts in practice, and a severity rule built on them never fires.
 var MERCURY_EXT = 1001
 var MERCURY_ALERT_TYPE = 3
 
+// Both alert strings are bounded before they leave this file. Measured over
+// tests/fixtures/alerts.pb: 194 of 195 alerts carry a description, median 338
+// characters and longest 1398, so nothing real comes near this. That is the
+// point -- the cap exists so a pathological feed cannot hand one QML Text
+// element a multi-megabyte string, not to edit the MTA's prose.
+var ALERT_TEXT_LIMIT = 2000
+// Built, not typed, for the same reason BAR_GLYPH is.
+var ELLIPSIS = String.fromCharCode(0x2026)
+var PLAIN_LANGUAGE = "en"
+
+// Bounded, and visibly so. The cap counts the marker, so the limit is the
+// length of what a Text element receives rather than the length before a
+// marker was appended to it.
+function boundText(text, limit) {
+  if (!text) return ""
+  if (text.length <= limit) return text
+  return text.substring(0, limit - 1) + ELLIPSIS
+}
+
+// One TranslatedString, as one bounded plain string.
+//
+// The language is READ, not assumed from position. Every header and every
+// description in this feed ships `en` followed by `en-html`, and the en-html
+// one is real markup -- QML Text defaults to AutoText, so it would be RENDERED
+// rather than shown. Taking translation 0 is correct only while that ordering
+// holds, and nothing upstream promises it.
+//
+// A feed that names no language at all still shows its first translation:
+// dropping the text would hide a real service alert over a missing tag.
+function translatedText(bytes, start, end, limit) {
+  var first = ""
+  var preferred = ""
+  walkFields(bytes, start, end, function (tf, tw, tv, ts, te) {
+    if (tf !== 1 || tw !== 2) return
+    var text = ""
+    var lang = ""
+    walkFields(bytes, ts, te, function (nf, nw, nv, ns, ne) {
+      if (nf === 1 && nw === 2) text = utf8(bytes, ns, ne)
+      else if (nf === 2 && nw === 2) lang = utf8(bytes, ns, ne)
+    })
+    if (!first) first = text
+    if (!preferred && lang === PLAIN_LANGUAGE) preferred = text
+  })
+  return boundText(preferred || first, limit)
+}
+
 function decodeAlert(bytes, start, end) {
   var headerText = ""
+  var descriptionText = ""
   var alertType = ""
   var routes = []
   var periods = []
@@ -328,12 +375,11 @@ function decodeAlert(bytes, start, end) {
         if (routes.indexOf(route) < 0) routes.push(route)
       })
     } else if (f === 10 && w === 2 && !headerText) {
-      walkFields(bytes, s, e, function (tf, tw, tv, ts, te) {
-        if (tf !== 1 || tw !== 2) return
-        walkFields(bytes, ts, te, function (nf, nw, nv, ns, ne) {
-          if (nf === 1 && nw === 2 && !headerText) headerText = utf8(bytes, ns, ne)
-        })
-      })
+      headerText = translatedText(bytes, s, e, ALERT_TEXT_LIMIT)
+    } else if (f === 11 && w === 2 && !descriptionText) {
+      // The headline is often only "Delays" or "Service change"; this is where
+      // the detail the rider needs actually lives.
+      descriptionText = translatedText(bytes, s, e, ALERT_TEXT_LIMIT)
     } else if (f === MERCURY_EXT && w === 2) {
       walkFields(bytes, s, e, function (mf, mw, mv, ms, me) {
         if (mf === MERCURY_ALERT_TYPE && mw === 2) alertType = utf8(bytes, ms, me)
@@ -341,8 +387,8 @@ function decodeAlert(bytes, start, end) {
     }
   })
   return {
-    headerText: headerText, alertType: alertType,
-    routes: routes, periods: periods
+    headerText: headerText, descriptionText: descriptionText,
+    alertType: alertType, routes: routes, periods: periods
   }
 }
 
