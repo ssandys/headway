@@ -25,7 +25,7 @@ const REPO = path.join(__dirname, "..")
 // A scratch HOME plus a PATH directory of shims. `pingSucceedsAfter` is which
 // `shell ping` call first answers, so a test can make the shell come back
 // late, or never.
-function scratch(pingSucceedsAfter) {
+function scratch(pingSucceedsAfter, restartExitCode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "headway-dev-"))
   const bin = path.join(dir, "bin")
   fs.mkdirSync(bin)
@@ -34,8 +34,15 @@ function scratch(pingSucceedsAfter) {
   fs.writeFileSync(log, "")
   fs.writeFileSync(counter, "0")
 
+  // `restart shell` can exit non-zero: omarchy-restart-shell reports
+  // "Omarchy shell did not become ready after restart" when it loses its own
+  // race. Default 0 keeps the other tests as they were.
+  const rc = restartExitCode === undefined ? 0 : restartExitCode
   fs.writeFileSync(path.join(bin, "omarchy"),
-    `#!/bin/bash\necho "omarchy $*" >> ${JSON.stringify(log)}\nexit 0\n`,
+    `#!/bin/bash\n` +
+    `echo "omarchy $*" >> ${JSON.stringify(log)}\n` +
+    `if [[ "$1 $2" == "restart shell" ]]; then exit ${rc}; fi\n` +
+    `exit 0\n`,
     { mode: 0o755 })
 
   fs.writeFileSync(path.join(bin, "omarchy-shell"),
@@ -107,4 +114,30 @@ test("up fails, naming the recovery, when two restarts do not bring it back", ()
   assert.match(r.out, /omarchy restart shell/,
     "the error must name the command that recovers it")
   assert.equal(s.restarts(), 2, "two attempts, then give up rather than thrash")
+})
+
+test("up survives a restart command that reports failure and recovers", () => {
+  // `omarchy restart shell` exits non-zero when it loses its own race -- it
+  // prints "Omarchy shell did not become ready after restart" and gives up.
+  // Under `set -e` that aborted bin/dev at the restart line, BEFORE the wait
+  // and retry that exist for exactly this case, so the guard never ran and the
+  // desktop was left with no shell. Measured on a live desktop: the journal
+  // showed the replacement refusing with "An instance of this configuration is
+  // already running" while bin/dev had already exited.
+  //
+  // The restart's exit code is not the question. Whether a shell is answering
+  // afterwards is.
+  const s = scratch(4, 1)
+  const r = runUp(s)
+  assert.equal(r.code, 0,
+    "a failing restart command must not abort the guard: " + r.out)
+  assert.equal(s.restarts(), 1, "the shell answered, so no retry was needed")
+})
+
+test("up still fails when the restart reports failure AND nothing answers", () => {
+  const s = scratch(9999, 1)
+  const r = runUp(s)
+  assert.notEqual(r.code, 0, "a dead shell must not exit 0")
+  assert.match(r.out, /omarchy restart shell/)
+  assert.equal(s.restarts(), 2, "two attempts, then give up")
 })
