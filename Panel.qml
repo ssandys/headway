@@ -65,8 +65,13 @@ Panel {
   //
   // wasOpen goes out with detach() because a surface destroyed while its panel
   // is open would otherwise leave openPanels counting a panel that is gone.
-  Component.onCompleted: Service.attach({ settings: root.settings })
+  Component.onCompleted: Service.attach({})
   Component.onDestruction: Service.detach({ wasOpen: root.opened })
+  // NOT in onCompleted: the bar sets `settings` from its Loader's onLoaded,
+  // after this item has completed, so at completion it is still Ui/Panel.qml's
+  // empty default. Handing that over is what made every setting fall back to
+  // its default (#15). This fires for the injection and for every later edit.
+  onSettingsChanged: Service.configure(root.settings)
   onOpenedChanged: Service.setPanelOpen(!root.opened, root.opened)
 
   // BarIconButton, NOT WidgetButton. It paints the glyph through OpticalGlyph,

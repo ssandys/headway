@@ -31,18 +31,30 @@ Item {
   // Set by the first attach(), so a later surface handing over the same
   // settings object does not churn a bound property every time a monitor is
   // plugged in.
-  property bool settingsAttached: false
   // How many panels are open, not whether THIS one is: with several surfaces,
   // "open" means any of them, and the faster interval applies while any is.
   property int openPanels: 0
   readonly property bool shouldRun: root.consumers > 0
 
+  // attach() counts a widget and does NOT take settings. It used to, once,
+  // from the widget's Component.onCompleted -- and that is before the bar
+  // injects settings: Bar.qml's Loader sets them in onLoaded, after the item
+  // has completed. So attach() latched the widget's empty default for good and
+  // every setting silently fell back to its hardcoded value (#15). It also
+  // cannot take them conditionally: every surface attaches with its own still-
+  // empty object, so a monitor plugged in later would wipe the real settings.
   function attach(options) {
-    if (options && options.settings && !root.settingsAttached) {
-      root.settings = options.settings
-      root.settingsAttached = true
-    }
     root.consumers = root.consumers + 1
+  }
+
+  // Settings arrive here, and the LATEST always wins. Panel calls this from
+  // onSettingsChanged, which fires both for the bar's late injection and for
+  // every edit in the settings UI (applySettingsDelta assigns a new object).
+  // Every surface is handed the same moduleSettings, so last-writer is right.
+  // The readonly properties above re-evaluate on their own, because setting()
+  // reads root.settings inside the binding -- only the delivery was broken.
+  function configure(settings) {
+    root.settings = settings ? settings : ({})
   }
 
   function detach(options) {
