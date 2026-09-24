@@ -82,6 +82,11 @@ Item {
   readonly property int trainsPerDirection: setting("trainsPerDirection", 3)
   readonly property bool notifyRouteAlert: setting("notifyRouteAlert", true)
   readonly property bool notifyFeedStale: setting("notifyFeedStale", true)
+  // The poll timer's LIVE interval, read-only, for tests/service.test.js: the
+  // intervals above are only numbers until pollTimer's binding turns them into
+  // a schedule, and an alias reads the timer itself rather than a copy of its
+  // formula that could drift from it.
+  readonly property alias pollIntervalMs: pollTimer.interval
 
   property bool ok: true
   property string error: ""

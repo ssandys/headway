@@ -54,6 +54,8 @@ function runService(script, check, wait) {
       "import Quickshell\n" +
       "import \".\"\n" +
       "ShellRoot {\n" +
+      "  id: root\n" +
+      "  property int idleMs: -1\n" +
       "  Component.onCompleted: {\n" + script + "\n  }\n" +
       "  Timer {\n" +
       "    running: true; interval: " + (wait || 1500) + "\n" +
@@ -114,6 +116,52 @@ test("a second surface attaching does not clobber settings with an empty object"
     " Service.attach({ settings: ({}) })",
     "Service.idleInterval === 45 && Service.consumers === 2")
   assert.equal(r.code, 0, "a later attach wiped the settings\n" + r.out)
+})
+
+test("clearing a setting puts its default back", { skip }, () => {
+  // configure() REPLACES the settings object; it does not merge into it. A
+  // merge would keep a cleared key's old value forever -- the settings UI
+  // drops a key back to the manifest default by leaving it out.
+  const r = runService(
+    "Service.attach({});" +
+    " Service.configure({ pollIntervalIdleSec: 45, notifyRouteAlert: false });" +
+    " Service.configure({})",
+    "Service.idleInterval === 90 && Service.notifyRouteAlert === true")
+  assert.equal(r.code, 0, "a cleared setting kept its old value\n" + r.out)
+})
+
+test("settings that name only some keys leave the rest at their defaults", { skip }, () => {
+  const r = runService(
+    "Service.attach({}); Service.configure({ trainsPerDirection: 5 })",
+    "Service.trainsPerDirection === 5 && Service.idleInterval === 90" +
+    " && Service.openInterval === 30 && Service.notifyFeedStale === true")
+  assert.equal(r.code, 0, "an unnamed key lost its default\n" + r.out)
+})
+
+test("configure with nothing falls back to defaults rather than throwing", { skip }, () => {
+  const r = runService(
+    "Service.attach({});" +
+    " Service.configure({ pollIntervalIdleSec: 45 }); Service.configure(null);" +
+    " Service.configure({ pollIntervalIdleSec: 46 }); Service.configure(undefined)",
+    "Service.idleInterval === 90")
+  assert.equal(r.code, 0, "configure(null/undefined) misbehaved\n" + r.out)
+})
+
+test("the poll timer runs on the configured intervals", { skip }, () => {
+  // pollIntervalMs aliases pollTimer.interval itself, so this is the schedule
+  // the timer is really on -- not just the number a setting resolved to.
+  const r = runService(
+    "Service.attach({});" +
+    " Service.configure({ pollIntervalIdleSec: 45, pollIntervalOpenSec: 20 });" +
+    " root.idleMs = Service.pollIntervalMs;" +
+    " Service.setPanelOpen(false, true)",
+    "root.idleMs === 45000 && Service.pollIntervalMs === 20000")
+  assert.equal(r.code, 0, "the timer did not follow the settings\n" + r.out)
+})
+
+test("with no settings the poll timer runs on the default interval", { skip }, () => {
+  const r = runService("Service.attach({})", "Service.pollIntervalMs === 90000")
+  assert.equal(r.code, 0, "the default schedule is wrong\n" + r.out)
 })
 
 // The widget's half of #15, which the tests above cannot see: they call
