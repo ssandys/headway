@@ -32,6 +32,21 @@ test("Service.qml's setting() fallbacks match the manifest defaults", () => {
   }
 })
 
+test("every setting Service.qml reads is declared in the manifest", () => {
+  // The direction the test above cannot see. A key read here but missing from
+  // the manifest has no default the host knows about and no schema entry, so
+  // the settings UI never offers it: the widget just uses its fallback forever,
+  // and a one-letter typo on either side looks exactly the same.
+  const source = serviceQml.replace(/(^|\s)\/\/.*$/gm, "$1")
+  const schemaKeys = manifest.barWidget.schema.map(entry => entry.key)
+  const read = [...source.matchAll(/setting\(\s*"([A-Za-z]+)"/g)].map(m => m[1])
+  assert.ok(read.length > 0, "found no setting() reads -- has the accessor been renamed?")
+  for (const key of read) {
+    assert.ok(key in manifest.barWidget.defaults, `${key} has a manifest default`)
+    assert.ok(schemaKeys.includes(key), `${key} has a schema entry`)
+  }
+})
+
 test("the devkit scripts carry no plugin-specific literal", () => {
   // bin/dev and bin/dev-watch are copied byte-identical from galley and
   // derive plugin identity from manifest.json at runtime. That is what makes
