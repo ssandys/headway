@@ -115,3 +115,44 @@ test("a second surface attaching does not clobber settings with an empty object"
     "Service.idleInterval === 45 && Service.consumers === 2")
   assert.equal(r.code, 0, "a later attach wiped the settings\n" + r.out)
 })
+
+// The widget's half of #15, which the tests above cannot see: they call
+// Service.configure() themselves, so they pass whether or not Panel.qml ever
+// does. Loading Panel.qml for real needs the bar's own Ui components, so these
+// read the source instead -- crude, but they fail on exactly the edits that
+// bring #15 back. Static, so unlike the tests above they run without quickshell.
+//
+// Line comments are stripped first, and only where `//` starts the line or
+// follows whitespace, so a URL's "https://" survives. The comments around this
+// wiring NAME everything checked here, and prose must not satisfy -- or fail --
+// a guard.
+function source(name) {
+  return fs.readFileSync(path.join(ROOT, name), "utf8").replace(/(^|\s)\/\/.*$/gm, "$1")
+}
+
+test("the widget hands over every settings change", () => {
+  assert.match(source("Panel.qml"),
+    /onSettingsChanged:\s*Service\.configure\(\s*root\.settings\s*\)/,
+    "Panel.qml must forward settings from onSettingsChanged: the bar injects " +
+    "them after Component.onCompleted, so attach() is too early")
+})
+
+test("the widget does not hand settings to attach", () => {
+  const panel = source("Panel.qml")
+  const start = panel.indexOf("Service.attach(")
+  assert.notEqual(start, -1, "Panel.qml no longer attaches")
+  const call = panel.slice(start, panel.indexOf("})", start) + 2)
+  assert.doesNotMatch(call, /settings/,
+    "attach() runs before the bar injects settings; whatever it is handed " +
+    "there is the empty default")
+})
+
+test("attach does not take settings", () => {
+  const service = source("Service.qml")
+  const start = service.indexOf("function attach(options) {")
+  assert.notEqual(start, -1, "Service.qml no longer has attach(options)")
+  const body = service.slice(start, service.indexOf("\n  }\n", start))
+  assert.doesNotMatch(body, /settings/,
+    "attach() must not latch settings: the first surface attaches holding " +
+    "the empty default (#15)")
+})
