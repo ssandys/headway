@@ -405,7 +405,12 @@ Panel {
               property var run: null
               // One line tall, so a bullet centres against the words instead
               // of setting the line's height and spreading the paragraph.
-              implicitWidth: ((run && run.sp) ? spaceMetrics.advanceWidth : 0)
+              // A word space before a bullet that follows a space in the feed;
+              // a sliver before one written flush against another bullet
+              // ("[2][5]", #16), so the two discs neither touch nor read as
+              // separate words.
+              implicitWidth: ((run && run.sp) ? spaceMetrics.advanceWidth
+                            : (run && run.adj) ? Style.font.caption * 0.2 : 0)
                            + Style.font.caption * 1.4
               implicitHeight: spaceMetrics.height
               RouteBullet {
@@ -453,26 +458,40 @@ Panel {
               Layout.alignment: Qt.AlignTop
             }
 
-            Flow {
+            // EVERY headline line, one Flow each, exactly as the description
+            // lays out below. Only headerRuns[0] used to render, and nothing
+            // else reads the header, so a second line -- 25 of 195 in the
+            // fixture, often "All trains at E 180 St board from the uptown
+            // platform" -- was shown nowhere at all (#17).
+            Column {
               Layout.fillWidth: true
-              // Zero, because every run carries its own leading gap. Uniform
-              // spacing here is exactly what detaches punctuation from its
-              // bullet -- "[SIR]," would render as "SIR , see below".
               spacing: 0
               // Applied ONCE, on the container, as the Text it replaces
               // applied it to itself.
               opacity: alertRow.runOpacity
               Repeater {
-                model: alertRow.modelData.headerRuns
-                     && alertRow.modelData.headerRuns.length > 0
-                     ? alertRow.modelData.headerRuns[0] : []
-                delegate: Loader {
+                model: alertRow.modelData.headerRuns || []
+                delegate: Flow {
                   required property var modelData
-                  sourceComponent: modelData.t === "r" ? runBulletComp
-                                                       : runWordComp
-                  onLoaded: {
-                    item.run = modelData
-                    if (modelData.t !== "r") item.tint = alertRow.runColor
+                  width: parent.width
+                  // Zero, because every run carries its own leading gap.
+                  // Uniform spacing here is exactly what detaches punctuation
+                  // from its bullet -- "[SIR]," would render as "SIR , see".
+                  spacing: 0
+                  // A blank line keeps its height, as in the description.
+                  height: modelData.length === 0 ? spaceMetrics.height
+                                                 : implicitHeight
+                  Repeater {
+                    model: parent.modelData
+                    delegate: Loader {
+                      required property var modelData
+                      sourceComponent: modelData.t === "r" ? runBulletComp
+                                                           : runWordComp
+                      onLoaded: {
+                        item.run = modelData
+                        if (modelData.t !== "r") item.tint = alertRow.runColor
+                      }
+                    }
                   }
                 }
               }

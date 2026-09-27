@@ -324,8 +324,30 @@ function bracketedRouteId(word) {
   return id
 }
 
+// "[2][5]" -> ["2", "5"], "[6]" -> ["6"], anything else -> []. The feed writes
+// a route GROUP with no space between the ids, up to eleven in a row in the
+// fixture, so a space-split word can be several ids (#16). All or nothing: a
+// word holding anything but ids stays text, whole, rather than scattering a
+// fragment of prose between bullets.
+function bracketedRouteIds(word) {
+  var ids = []
+  var start = 0
+  while (start < word.length) {
+    var close = word.indexOf("]", start)
+    if (close < 0) return []
+    var id = bracketedRouteId(word.substring(start, close + 1))
+    if (id === "") return []
+    ids.push(id)
+    start = close + 1
+  }
+  return ids
+}
+
 // Splits one space-delimited word into runs. `sp` applies to the first of them;
-// everything after it hugs what precedes it.
+// everything after it hugs what precedes it. A bullet that follows another
+// bullet directly also carries `adj`, so the panel can part the two with a
+// sliver instead of letting the discs touch -- a word space would be wrong,
+// the feed wrote none, and the text reconstruction must stay exact.
 function wordRuns(word, sp, out) {
   var lead = ""
   while (word.length > 0 && ROUTE_LEAD.indexOf(word.charAt(0)) >= 0) {
@@ -337,15 +359,18 @@ function wordRuns(word, sp, out) {
     trail = word.charAt(word.length - 1) + trail
     word = word.substring(0, word.length - 1)
   }
-  var id = bracketedRouteId(word)
-  if (id === "") {
+  var ids = bracketedRouteIds(word)
+  if (ids.length === 0) {
     // Not a route after all, so that punctuation was never punctuation --
     // put the word back together and emit it whole.
     out.push({ t: "s", v: lead + word + trail, sp: sp })
     return
   }
   if (lead !== "") out.push({ t: "s", v: lead, sp: sp })
-  out.push({ t: "r", v: id, sp: lead === "" ? sp : false })
+  out.push({ t: "r", v: ids[0], sp: lead === "" ? sp : false })
+  for (var i = 1; i < ids.length; i++) {
+    out.push({ t: "r", v: ids[i], sp: false, adj: true })
+  }
   if (trail !== "") out.push({ t: "s", v: trail, sp: false })
 }
 
