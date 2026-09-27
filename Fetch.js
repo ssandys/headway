@@ -23,6 +23,10 @@ function curlArgs(url, maxBytes, timeoutSec) {
   if (typeof url !== "string" || url.indexOf("https://") !== 0) return null
   return [
     "curl",
+    // FIRST, or it does nothing: curl reads ~/.curlrc before any other
+    // argument, and -q is the one flag that stops it. A user's `include`,
+    // `output` or `location` line would otherwise reshape every fetch (#24).
+    "-q",
     "-sS",           // no progress meter, but do report errors on stderr
     "--fail",        // an HTTP error is an exit code, never a body to decode
     "--proto", "=https",
