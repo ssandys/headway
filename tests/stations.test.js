@@ -248,3 +248,26 @@ test("search is not fooled by a prototype-chain station id", () => {
   assert.equal(Stations.search(table, "", null, 10).length, 2,
     "both stations must survive grouping")
 })
+
+// ---- originFromWeather ------------------------------------------------------
+
+test("originFromWeather reads the coordinates omarchy-weather-location stores", () => {
+  assert.deepEqual(
+    Stations.originFromWeather('{"name":"Brooklyn","latitude":40.67,"longitude":-73.95}'),
+    { lat: 40.67, lon: -73.95 })
+})
+
+test("originFromWeather accepts 0, the equator and the prime meridian", () => {
+  // typeof, not falsy -- the rule Service.qml's old reader stated too.
+  assert.deepEqual(Stations.originFromWeather('{"latitude":0,"longitude":0}'), { lat: 0, lon: 0 })
+})
+
+test("originFromWeather is null for anything that is not a location, and never throws", () => {
+  ;["", "{", "null", "[]", "42", '{"name":"x"}',
+    '{"latitude":"40.6","longitude":-73.9}', '{"latitude":40.6}',
+    '{"latitude":91,"longitude":0}', '{"latitude":0,"longitude":-181}',
+    '{"latitude":1e999,"longitude":0}', undefined, null
+  ].forEach(function (text) {
+    assert.equal(Stations.originFromWeather(text), null, JSON.stringify(text))
+  })
+})

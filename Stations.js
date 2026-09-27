@@ -179,10 +179,35 @@ function search(stations, query, origin, limit) {
   return grouped
 }
 
+// The origin for distances, from the location Omarchy's weather widget stores
+// (omarchy-weather-location writes it). Takes TEXT: Service.qml reads the file
+// through State.readArgs -- bounded, no symlinks, no FIFO stall -- because it
+// sits at a predictable path in the same directory as headway.json, and a
+// FileView read of it had none of those guarantees.
+//
+// Null unless both coordinates are finite numbers in range. typeof rather than
+// a falsy test, because latitude 0 and longitude 0 are real places. Never
+// throws: the result goes straight into a property.
+function originFromWeather(text) {
+  var w
+  try {
+    if (!text || typeof text !== "string") return null
+    w = JSON.parse(text)
+  } catch (e) {
+    return null
+  }
+  if (!w || typeof w !== "object") return null
+  var p = { lat: w.latitude, lon: w.longitude }
+  if (!hasFiniteCoords(p)) return null
+  if (p.lat < -90 || p.lat > 90 || p.lon < -180 || p.lon > 180) return null
+  return p
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     byId: byId, platformId: platformId,
     parentOf: parentOf, haversineKm: haversineKm, boroughName: boroughName,
-    directionsFor: directionsFor, search: search
+    directionsFor: directionsFor, search: search,
+    originFromWeather: originFromWeather
   }
 }
