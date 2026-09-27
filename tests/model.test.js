@@ -897,6 +897,60 @@ test("alertRuns carries the feed's id, express marker and all", () => {
   ])
 })
 
+test("alertRuns splits route ids written back to back into one bullet each (#16)", () => {
+  // The feed writes a route group with no spaces: "[2][5]", "[A][C][E]". Split
+  // only on spaces, the whole group was one word that is not a single id, so
+  // it fell through as the literal text "[2][5]" -- 150 times in the fixture.
+  // Bullets after the first hug it (sp false) and carry `adj`, which is how
+  // the panel knows to leave a small gap rather than a word space.
+  assert.deepEqual(Model.alertRuns("Manhattan-bound [2][5] runs express"), [
+    [runText("Manhattan-bound", false),
+     runRoute("2", true), { t: "r", v: "5", sp: false, adj: true },
+     runText("runs", true), runText("express", true)]
+  ])
+})
+
+test("a route group keeps its punctuation, and its express ids", () => {
+  assert.deepEqual(Model.alertRuns("the [A][C][E], then ([7][7X])."), [
+    [runText("the", false),
+     runRoute("A", true), { t: "r", v: "C", sp: false, adj: true },
+     { t: "r", v: "E", sp: false, adj: true }, runText(",", false),
+     runText("then", true), runText("(", true),
+     runRoute("7", false), { t: "r", v: "7X", sp: false, adj: true },
+     runText(").", false)]
+  ])
+})
+
+test("a group with anything that is not an id in it stays text, whole", () => {
+  // All or nothing: a word is a route group only if it is nothing BUT ids. A
+  // partial split would scatter a sentence fragment between bullets.
+  ;["[2][icon]", "[2]and[5]", "[2][]", "[2][5", "x[2][5]", "[2][5]x"].forEach(function (word) {
+    const runs = Model.alertRuns("a " + word)
+    assert.equal(runs[0].length, 2, word + " must stay one run")
+    assert.deepEqual(runs[0][1], runText(word, true))
+  })
+})
+
+test("every bracketed id in the fixture becomes a bullet", () => {
+  // The survey behind #16: before the fix, 63 "[X][X]" words, 33 of three ids,
+  // up to eleven in a row. After it, no text run may still hold a bracketed
+  // id -- anything left is an id shape this tokenizer does not know.
+  const bytes = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "fixtures", "alerts.pb"))
+  const feed = Gtfs.decodeAlerts(new Uint8Array(bytes))
+  const leftover = []
+  for (const a of feed.alerts) {
+    for (const s of [a.headerText, a.descriptionText]) {
+      for (const line of Model.alertRuns(s)) {
+        for (const r of line) {
+          if (r.t === "s" && /\[[A-Z0-9]{1,3}\]/.test(r.v)) leftover.push(r.v)
+        }
+      }
+    }
+  }
+  assert.deepEqual(leftover, [])
+})
+
 test("alertRuns does not mistake ordinary bracketed words for routes", () => {
   ;["[icon]", "[6789]", "[]", "[a]"].forEach(function (word) {
     const runs = Model.alertRuns("x " + word)
