@@ -323,3 +323,119 @@ test("alerts from a curl that FAILED are not decoded", { skip }, () => {
   assert.equal(r.code, 0, "a failed fetch's output was decoded\n" + r.out)
 })
 
+
+// ---- notifications follow every saved route (#23) ---------------------------
+
+// A fake notify-send that appends each notification's body to `log`. Service
+// calls it as `notify-send -a Headway -- <summary> <body>`, so the body is $5.
+// Its shebang is an absolute /bin/sh and printf is a builtin, so it runs with
+// PATH empty.
+function withNotifyLog(log) {
+  return function (home, bin) {
+    fs.writeFileSync(path.join(bin, "notify-send"),
+      "#!/bin/sh\nprintf '%s\\n' \"$5\" >> '" + log + "'\n", { mode: 0o755 })
+  }
+}
+
+const js = (v) => JSON.stringify(v)
+const alertOn = (id, routes) =>
+  ({ id: id, alertType: "Delays", routes: routes, periods: [], headerText: id })
+const station = (id, routes) =>
+  ({ stopId: id, name: id, routes: routes, direction: "N" })
+
+test("three notifications raised in one tick are all sent, in order", { skip }, () => {
+  // Process.running reads false until the event loop starts the process, so
+  // the queue used to hand the second and third notification to a process it
+  // took for idle -- overwriting the first's command. Only the last was sent.
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "headway-notify-"))
+  const log = path.join(logDir, "log")
+  try {
+    const r = runService(
+      "Service.attach({}); Service.notify('s', 'one'); Service.notify('s', 'two');" +
+      " Service.notify('s', 'three'); root.done = true",
+      "root.done", 2000, withNotifyLog(log))
+    assert.equal(r.code, 0, r.out)
+    assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["one", "two", "three"])
+  } finally {
+    fs.rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+test("a missing notify-send does not stall the queue", { skip }, () => {
+  // A failed spawn emits only runningChanged(false), which must clear `busy`
+  // -- otherwise the first notification with notify-send absent latches the
+  // queue shut for the life of the shell.
+  const r = runService(
+    "Service.attach({}); Service.notify('s', 'one'); Service.notify('s', 'two')",
+    "Service.notifyQueue.length === 0", 1500)
+  assert.equal(r.code, 0, "the queue stalled\n" + r.out)
+})
+
+test("alerts notify for every saved route, with no burst on save or switch (#23)", { skip }, () => {
+  // One scripted session. Expected: B, D and F notify, and nothing else.
+  //   A  running at startup                 absorbed (backlog)
+  //   B  new on the active station's 6      notifies
+  //   C  running on L before L is saved     absorbed when L's station is saved
+  //   D  new on L                           notifies
+  //   F  new on L while 635 is active       notifies -- every saved route counts
+  //   G  new while notifications are off   remembered, so it stays silent
+  //                                         when they are turned back on
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "headway-notify-"))
+  const log = path.join(logDir, "log")
+  try {
+    const A = alertOn("A", ["6"]), B = alertOn("B", ["6"]), C = alertOn("C", ["L"])
+    const D = alertOn("D", ["L"]), F = alertOn("F", ["L"]), G = alertOn("G", ["6"])
+    const r = runService(
+      "Service.attach({}); Service.consumeState('');" +
+      " Service.saveStation(" + js(station("635", ["6"])) + ");" +
+      " Service.alertsArrived(" + js([A]) + ");" +
+      " Service.alertsArrived(" + js([A, B]) + ");" +
+      " Service.alertsArrived(" + js([A, B, C]) + ");" +
+      " Service.saveStation(" + js(station("L08", ["L"])) + ");" +
+      " Service.alertsArrived(" + js([A, B, C, D]) + ");" +
+      " Service.setActive('635');" +
+      " Service.alertsArrived(" + js([A, B, C, D, F]) + ");" +
+      " Service.configure({ notifyRouteAlert: false });" +
+      " Service.alertsArrived(" + js([A, B, C, D, F, G]) + ");" +
+      " Service.configure({});" +
+      " Service.alertsArrived(" + js([A, B, C, D, F, G]) + ");" +
+      " root.done = true",
+      "root.done", 2500, withNotifyLog(log))
+    assert.equal(r.code, 0, "the session did not complete\n" + r.out)
+    const sent = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []
+    assert.deepEqual(sent, ["B", "D", "F"])
+  } finally {
+    fs.rmSync(logDir, { recursive: true, force: true })
+  }
+})
+
+// ---- the bar with no station to show (#19) ----------------------------------
+
+test("removing the last station clears the old feed status (#19)", { skip }, () => {
+  // refresh() returned early with no station and left ok, error and
+  // feedTimestamp as the last station had them: permanently red on a dead
+  // feed, or amber once that timestamp aged past staleAfterSec. And wasStale
+  // left true made the next real poll announce "current again".
+  const r = runService(
+    "Service.attach({}); Service.consumeState('');" +
+    " Service.saveStation(" + js(station("635", ["6"])) + ");" +
+    " Service.ok = false; Service.error = 'boom';" +
+    " Service.feedTimestamp = 123; Service.wasStale = true;" +
+    " Service.removeStation('635')",
+    "Service.ok === true && Service.error === '' && Service.feedTimestamp === 0" +
+    " && Service.wasStale === false && Service.arrivals.length === 0" +
+    " && Service.loading === false && Service.barState.severity === 'ok'")
+  assert.equal(r.code, 0, "the old status survived\n" + r.out)
+})
+
+test("a station no feed serves says so, instead of keeping the last status (#19)", { skip }, () => {
+  // Only a hand-edited file can hold one -- every station the picker offers
+  // maps to a feed -- but then something really is wrong, and the panel
+  // should say what rather than go quietly blank.
+  const r = runService(
+    "Service.attach({});" +
+    " Service.consumeState(" + js(js({ stations: [station("X1", ["ZZ"])] })) + ")",
+    "Service.ok === false && Service.error === \"no feed serves this station's routes\"" +
+    " && Service.arrivals.length === 0 && Service.feedTimestamp === 0")
+  assert.equal(r.code, 0, "the no-feed station was not reported\n" + r.out)
+})

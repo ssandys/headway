@@ -174,6 +174,69 @@ function alertsFor(routes, alerts, nowSec) {
   return out
 }
 
+// Every saved station's routes, each once, in the order the stations list
+// them. What alert notifications track (#23): all of them, whichever station
+// is on screen.
+function routesOfStations(stations) {
+  var out = []
+  var seen = {}
+  for (var i = 0; i < (stations || []).length; i++) {
+    var routes = stations[i].routes || []
+    for (var j = 0; j < routes.length; j++) {
+      var key = "r:" + routes[j]
+      if (Object.prototype.hasOwnProperty.call(seen, key)) continue
+      seen[key] = true
+      out.push(routes[j])
+    }
+  }
+  return out
+}
+
+// Which live alerts to notify for, and what to remember afterwards (#23).
+//
+//   routes       every route tracked NOW -- routesOfStations(saved stations)
+//   knownRoutes  the routes that were tracked at the previous call
+//   seen         ids already dealt with, as { "a:<id>": true }; not modified
+//
+// An unseen live alert is FRESH -- notify -- only if it touches a route that
+// was already known. One touching only routes that have just started being
+// tracked was running before anyone was watching for it: backlog, absorbed
+// silently. So the first call (nothing known) absorbs everything, and saving a
+// station absorbs whatever its lines already have running, instead of the old
+// behaviour of replaying days-old alerts as a burst on the next poll.
+//
+// Every live alert on `routes` is remembered, but only amber and red ones are
+// returned as fresh: those are the ones worth interrupting someone for.
+//
+// `seen` comes back pruned to alerts still in the feed. An alert outside its
+// active period but still published stays remembered, so it does not notify
+// again when its next period starts; one that has left the feed is forgotten.
+// Keys are prefixed, as dedupeTrips' are, so "__proto__" is an ordinary id.
+function alertNotifications(routes, knownRoutes, alerts, nowSec, seen) {
+  var list = alerts || []
+  var prior = seen || {}
+  var next = {}
+  var i
+  for (i = 0; i < list.length; i++) {
+    var key = "a:" + list[i].id
+    if (Object.prototype.hasOwnProperty.call(prior, key)) next[key] = true
+  }
+  var known = {}
+  var onKnown = alertsFor(knownRoutes || [], list, nowSec)
+  for (i = 0; i < onKnown.length; i++) known["a:" + onKnown[i].id] = true
+  var fresh = []
+  var live = alertsFor(routes || [], list, nowSec)
+  for (i = 0; i < live.length; i++) {
+    var k = "a:" + live[i].id
+    if (Object.prototype.hasOwnProperty.call(next, k)) continue
+    next[k] = true
+    if (!Object.prototype.hasOwnProperty.call(known, k)) continue
+    var cls = classifyAlert(live[i].alertType)
+    if (cls === "amber" || cls === "red") fresh.push(live[i])
+  }
+  return { fresh: fresh, seen: next }
+}
+
 // The saved route an alert belongs to, or "" when it cannot be attributed.
 // Normalizes both sides, so a 6X alert lands on the 6.
 function matchedRouteOf(routes, alert) {
@@ -736,6 +799,8 @@ function tooltipText(snapshot, nowSec) {
 if (typeof module !== "undefined") {
   module.exports = {
     clampInt: clampInt,
+    routesOfStations: routesOfStations,
+    alertNotifications: alertNotifications,
     normalizeRoute: normalizeRoute,
     isExpress: isExpress,
     dedupeTrips: dedupeTrips,

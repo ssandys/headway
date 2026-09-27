@@ -392,6 +392,7 @@ Item {
     root.activeStationId = entry.stopId
     writeState()
     refresh()
+    checkNewAlerts()
   }
 
   function removeStation(id) {
@@ -403,6 +404,7 @@ Item {
     if (root.activeStationId === id) root.activeStationId = next.length ? next[0].stopId : ""
     writeState()
     refresh()
+    checkNewAlerts()
   }
 
   // ---- fetching --------------------------------------------------------
@@ -592,9 +594,17 @@ Item {
     root.feedQueue = []
     root.generation = root.generation + 1
     var gen = root.generation
-    if (!root.saved) { root.arrivals = []; root.loading = false; return }
+    if (!root.saved) { root.clearFeedStatus(); return }
     var feeds = Gtfs.feedsForRoutes(root.saved.routes)
-    if (feeds.length === 0) { root.arrivals = []; root.loading = false; return }
+    if (feeds.length === 0) {
+      // Only a hand-edited file can hold such a station -- every one the
+      // picker offers maps to a feed -- but then something is wrong, and the
+      // panel says what rather than go quietly blank.
+      root.clearFeedStatus()
+      root.ok = false
+      root.error = "no feed serves this station's routes"
+      return
+    }
     root.anyFailed = false
     root.loading = true
     root.tripLists = []
@@ -607,6 +617,21 @@ Item {
       queue.push({ url: Gtfs.feedUrl(feeds[i]), gen: gen })
     }
     root.feedQueue = queue
+  }
+
+  // Back to the state of a station never fetched (#19). The early returns in
+  // refresh() used to leave the LAST station's ok, error and feedTimestamp in
+  // place: a dead feed kept the bar red and hid "No station saved yet"
+  // forever, a live one turned amber once its timestamp aged past
+  // staleAfterSec, and a wasStale left true made the next real poll announce
+  // "Train data is current again." Silent: removing a station is not news.
+  function clearFeedStatus() {
+    root.arrivals = []
+    root.loading = false
+    root.ok = true
+    root.error = ""
+    root.feedTimestamp = 0
+    root.wasStale = false
   }
 
   function finishFeed(succeeded, why) {
@@ -741,9 +766,7 @@ Item {
     if (!data || data.byteLength === 0) return
     if (data.byteLength > root.feedByteLimit) return
     try {
-      var decoded = Gtfs.decodeAlerts(new Uint8Array(data))
-      root.alerts = decoded.alerts
-      root.checkNewAlerts()
+      root.alertsArrived(Gtfs.decodeAlerts(new Uint8Array(data)).alerts)
     } catch (e) {
       // keep the last good alerts
     }
@@ -770,55 +793,50 @@ Item {
   // ---- notifications ---------------------------------------------------
   // Diff state lives here, not in the pure modules: they hold nothing between
   // calls, so anything needing memory across polls belongs to the caller.
+  //
+  // Alert notifications follow EVERY saved station's routes, whichever one is
+  // on screen (#23). They used to follow only the active station's, primed
+  // once at startup -- so switching to another saved station, or saving one,
+  // replayed every alert already running on its lines as a burst of
+  // notifications on the next poll, and an alert starting on a saved but
+  // inactive station's line never notified at all. Model.alertNotifications
+  // makes the decision; this holds what it needs between calls.
   property var seenAlertIds: ({})
+  // The routes tracked at the previous decision. An alert that is new on one
+  // of these notifies; one already running on a route that has only just
+  // started being tracked is backlog, absorbed silently.
+  property var trackedRoutes: []
+  // False until the first alerts poll lands. Until then root.alerts is empty
+  // rather than known, so deciding anything -- or recording the routes as
+  // tracked -- would turn the real first poll's backlog into a burst.
+  property bool alertsPolled: false
   property bool wasStale: false
 
-  // False until the first alert poll has been absorbed. The alerts Timer has
-  // triggeredOnStart, so without this every alert already active on a saved
-  // route counts as new at shell start and fires a notification -- a burst on
-  // every login and every redeploy, for alerts that were running long before
-  // the widget started. The spec frames notifications as firing on the
-  // transition INTO an alert, and at a cold start there is no transition, only
-  // a backlog.
-  property bool alertsPrimed: false
+  // Where every decoded alerts poll lands.
+  function alertsArrived(list) {
+    root.alerts = list
+    root.alertsPolled = true
+    root.checkNewAlerts()
+  }
 
+  // After every alerts poll, and whenever the saved stations change -- a save
+  // absorbs its lines' running alerts NOW, so they are not news at the next
+  // poll. Runs with notifications switched off too, and only skips sending:
+  // otherwise turning the setting back on replayed everything that had
+  // started in the meantime.
+  //
+  // nowSec, not the minute-resolution clock liveAlerts uses: a "no service"
+  // alert should reach you promptly, not up to 59 seconds late.
   function checkNewAlerts() {
-    if (!root.notifyRouteAlert || !root.saved) return
-    if (!root.alertsPrimed) {
-      // Absorb the current state silently, so later polls report real changes.
-      // Every active alert is still visible in the panel -- this suppresses the
-      // notification, not the alert.
-      var backlog = Model.alertsFor(root.saved.routes, root.alerts, root.nowSec)
-      for (var b = 0; b < backlog.length; b++) {
-        root.seenAlertIds["a:" + backlog[b].id] = true
-      }
-      root.alertsPrimed = true
-      return
-    }
-    // Computes its own list rather than reading root.liveAlerts, and that is
-    // deliberate — not duplication to be tidied away. liveAlerts filters at
-    // MINUTE resolution, which is what stops the panel's alert Repeater
-    // rebuilding every delegate once a second. Notifications want SECOND
-    // resolution so a "no service" alert reaches you promptly instead of up
-    // to 59 seconds late. (Reading liveAlerts here would be safe — QML
-    // bindings are eager, verified by probe — it would just be slower.)
-    var live = Model.alertsFor(root.saved.routes, root.alerts, root.nowSec)
-    for (var i = 0; i < live.length; i++) {
-      var a = live[i]
-      var cls = Model.classifyAlert(a.alertType)
-      if (cls !== "amber" && cls !== "red") continue
-      // hasOwnProperty, not a bare lookup. seenAlertIds is a plain object
-      // used as a set, so `seenAlertIds["constructor"]` finds the inherited
-      // member, reads as already-seen, and that alert would NEVER notify.
-      // Alert ids come from the feed (`lmm:alert:264661:26`), and this is the
-      // third place in this project where a plain-object lookup table needed
-      // the same guard — Gtfs.js's feed map and Model.js's severity tables
-      // were the others.
-      // Prefixed like dedupeTrips' and search's tables: hasOwnProperty guards
-      // the read, but assigning seenAlertIds["__proto__"] never creates an own
-      // property, so such an alert would notify on EVERY poll forever.
-      if (Object.prototype.hasOwnProperty.call(root.seenAlertIds, "a:" + a.id)) continue
-      root.seenAlertIds["a:" + a.id] = true
+    if (!root.alertsPolled) return
+    var routes = Model.routesOfStations(root.stations)
+    var decision = Model.alertNotifications(
+      routes, root.trackedRoutes, root.alerts, root.nowSec, root.seenAlertIds)
+    root.seenAlertIds = decision.seen
+    root.trackedRoutes = routes
+    if (!root.notifyRouteAlert) return
+    for (var i = 0; i < decision.fresh.length; i++) {
+      var a = decision.fresh[i]
       root.notify("Headway - " + a.alertType, a.headerText || "")
     }
   }
@@ -852,6 +870,14 @@ Item {
 
   Process {
     id: notifyProc
+    // Set when a notification is started, cleared when it ends -- NOT read
+    // from `running`. MEASURED: `running` still reads false straight after
+    // `running = true`; the process only starts on the next pass of the event
+    // loop. So a second notify() in the same tick saw an idle process and
+    // overwrote the first one's command before it ever ran: of three
+    // notifications raised by one poll, only the last was sent. A failed spawn
+    // still emits runningChanged(false), so this cannot latch.
+    property bool busy: false
     onRunningChanged: {
       // Handle runningChanged, NOT just exited: Quickshell's Process never
       // emits exited() when a process fails to SPAWN, so an exited-only
@@ -861,6 +887,7 @@ Item {
       // both galley and colophon do this, and re-entering the handler by
       // starting the next process inside it is what they are avoiding.
       if (notifyProc.running) return
+      notifyProc.busy = false
       Qt.callLater(root.sendNextNotification)
     }
   }
@@ -873,9 +900,8 @@ Item {
   }
 
   function sendNextNotification() {
-    // Assigning Process.command while it is still running is a silent no-op,
-    // so exactly one at a time.
-    if (notifyProc.running) return
+    // Exactly one at a time, and `busy` rather than `running` -- see above.
+    if (notifyProc.busy) return
     if (root.notifyQueue.length === 0) return
     var next = root.notifyQueue[0]
     root.notifyQueue = root.notifyQueue.slice(1)
@@ -883,6 +909,7 @@ Item {
     // straight from the MTA feed, so one beginning with a dash would
     // otherwise be read as a flag. Galley passes `--` for the same reason.
     notifyProc.command = ["notify-send", "-a", "Headway", "--", next.summary, next.body]
+    notifyProc.busy = true
     notifyProc.running = true
   }
 
