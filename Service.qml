@@ -299,10 +299,19 @@ Item {
   // No selfWrites counter any more: it existed only to swallow the watcher
   // events our own writes caused, and nothing watches this file now. That also
   // retires the cumulative-stranding bug it had (open issue N9).
+  //
+  // A list too large to read back is refused rather than written (#21): the
+  // stations stay in memory for this session, and the journal says why they
+  // will not survive a restart.
   function writeState() {
-    root.pendingWrite = JSON.stringify({
-      version: 1, activeStationId: root.activeStationId, stations: root.stations
-    }, null, 2) + "\n"
+    var text = State.serializeState(root.activeStationId, root.stations,
+                                    root.stateByteLimit)
+    if (text === "") {
+      console.warn("headway: the station list is over " + root.stateByteLimit
+                   + " bytes and was not saved")
+      return
+    }
+    root.pendingWrite = text
     root.flushState()
   }
 

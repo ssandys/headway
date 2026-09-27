@@ -56,6 +56,7 @@ function runService(script, check, wait) {
       "ShellRoot {\n" +
       "  id: root\n" +
       "  property int idleMs: -1\n" +
+      "  property bool done: false\n" +
       "  Component.onCompleted: {\n" + script + "\n  }\n" +
       "  Timer {\n" +
       "    running: true; interval: " + (wait || 1500) + "\n" +
@@ -162,6 +163,24 @@ test("the poll timer runs on the configured intervals", { skip }, () => {
 test("with no settings the poll timer runs on the default interval", { skip }, () => {
   const r = runService("Service.attach({})", "Service.pollIntervalMs === 90000")
   assert.equal(r.code, 0, "the default schedule is wrong\n" + r.out)
+})
+
+test("saving a station reaches the writer through State.serializeState", { skip }, () => {
+  // writeState is the one caller of serializeState (#21), and only this
+  // harness executes it. A bad call there throws out of saveStation. PATH is empty, so the writer's sh
+  // fails to spawn and nothing is written anywhere.
+  const r = runService(
+    // Resolve the startup read first. It is asynchronous, and finishing after
+    // the save would reset the list to the (empty) file -- a harness race,
+    // since a person cannot pick a station within milliseconds of startup.
+    "Service.attach({}); Service.consumeState('');" +
+    " Service.saveStation({ stopId: '635', name: '14 St-Union Sq'," +
+    " routes: ['4', '5', '6'], direction: 'N' }); root.done = true",
+    // root.done, because the list is updated BEFORE writeState runs: a throw
+    // in it would leave stations looking saved. Only a save that returned
+    // sets it.
+    "root.done && Service.stations.length === 1 && Service.activeStationId === '635'")
+  assert.equal(r.code, 0, "saveStation did not complete\n" + r.out)
 })
 
 // The widget's half of #15, which the tests above cannot see: they call

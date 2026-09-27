@@ -419,3 +419,70 @@ test("parseState dedupes a prototype-chain stopId as an ordinary one", () => {
   const dup = { stations: [entry({ stopId: "__proto__" }), entry({ stopId: "__proto__" })] }
   assert.equal(parse(dup).stations.length, 1, "an identical __proto__ station must dedupe")
 })
+
+// ---- what is written must read back (#21) -----------------------------------
+
+test("parseState keeps only the fields a station has, dropping the rest (#21)", () => {
+  // The whole parsed object used to be kept, so anything else in the file rode
+  // along into root.stations and was written straight back out.
+  const doc = { stations: [entry({ junk: [0, 0, 0], extra: "x" })] }
+  assert.deepEqual(parse(doc).stations, [entry()])
+})
+
+test("parseState keeps a station with no name, and adds none (#21)", () => {
+  const bare = { stopId: "635", direction: "N", routes: ["6"] }
+  assert.deepEqual(parse({ stations: [bare] }).stations, [bare])
+})
+
+test("parseState bounds name at fieldLimit, like every other field (#21)", () => {
+  rejects({ name: "x".repeat(65) }, "a name longer than any station's is not one")
+  assert.equal(parse({ stations: [entry({ name: "x".repeat(64) })] }).stations.length, 1)
+})
+
+test("the issue's file loads, and saves back small (#21)", () => {
+  // One valid station plus 60 KB of junk, under the 64 KiB cap. It loaded with
+  // the junk intact, and pretty-printing inflated it to ~330 KB -- over
+  // Linux's 128 KiB argv limit, so every later save failed at execve.
+  const doc = JSON.stringify({ stations: [Object.assign(entry(), { junk: new Array(30000).fill(0) })] })
+  assert.ok(doc.length < CAP)
+  const loaded = parse(doc)
+  const text = State.serializeState(loaded.activeStationId, loaded.stations, CAP)
+  assert.ok(text !== "" && text.length < 1024, "saved " + text.length + " bytes")
+})
+
+test("serializeState round-trips through parseState", () => {
+  const stations = manyStations(5)
+  const text = State.serializeState("s3", stations, CAP)
+  assert.deepEqual(State.parseState(text, LIMITS), { stations: stations, activeStationId: "s3" })
+})
+
+test("serializeState refuses a list that could not be read back (#21)", () => {
+  // The reader stops at byteLimit bytes, so a longer file would load as
+  // truncated JSON -- every station lost on the next start. Refused instead,
+  // which also keeps the argv far below the 128 KiB execve limit.
+  const stations = manyStations(3)
+  const fits = State.serializeState("s0", stations, CAP)
+  assert.notEqual(fits, "")
+  assert.equal(State.serializeState("s0", stations, fits.length - 1), "")
+  assert.equal(State.serializeState("s0", stations, fits.length), fits)
+})
+
+test("serializeState counts BYTES, as the reader's cap does (#21)", () => {
+  // "é" is one UTF-16 unit and two UTF-8 bytes. Counting units would pass a
+  // file the byte-capped reader then truncates.
+  const stations = [entry({ name: "é".repeat(40) })]
+  const text = State.serializeState("635", stations, CAP)
+  const bytes = Buffer.byteLength(text, "utf8")
+  assert.ok(bytes > text.length)
+  assert.equal(State.serializeState("635", stations, bytes - 1), "")
+  assert.equal(State.serializeState("635", stations, bytes), text)
+})
+
+test("the largest save serializeState allows really runs (#21)", () => {
+  // Executed: a payload at the cap goes through writeArgs's sh -c argv and
+  // reads back whole. Past MAX_ARG_STRLEN execve would refuse it outright.
+  const d = tmpdir(), p = path.join(d, "headway.json")
+  const payload = "x".repeat(CAP)
+  assert.equal(writeFile(p, payload).code, 0)
+  assert.equal(readFile(p), payload)
+})
