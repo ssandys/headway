@@ -75,11 +75,17 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
-  readonly property int openInterval: setting("pollIntervalOpenSec", 30)
-  readonly property int idleInterval: setting("pollIntervalIdleSec", 90)
-  readonly property int alertsInterval: setting("alertsIntervalSec", 300)
-  readonly property int staleAfterSec: setting("staleAfterSec", 180)
-  readonly property int trainsPerDirection: setting("trainsPerDirection", 3)
+  // A numeric setting within its manifest schema's min and max (#25), which
+  // tests/manifest.test.js holds these literals to.
+  function boundedSetting(key, fallback, min, max) {
+    return Model.clampInt(setting(key, fallback), fallback, min, max)
+  }
+
+  readonly property int openInterval: boundedSetting("pollIntervalOpenSec", 30, 10, 120)
+  readonly property int idleInterval: boundedSetting("pollIntervalIdleSec", 90, 30, 600)
+  readonly property int alertsInterval: boundedSetting("alertsIntervalSec", 300, 60, 1800)
+  readonly property int staleAfterSec: boundedSetting("staleAfterSec", 180, 60, 900)
+  readonly property int trainsPerDirection: boundedSetting("trainsPerDirection", 3, 1, 6)
   readonly property bool notifyRouteAlert: setting("notifyRouteAlert", true)
   readonly property bool notifyFeedStale: setting("notifyFeedStale", true)
   // The poll timer's LIVE interval, read-only, for tests/service.test.js: the

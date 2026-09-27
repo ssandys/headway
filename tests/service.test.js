@@ -183,6 +183,19 @@ test("saving a station reaches the writer through State.serializeState", { skip 
   assert.equal(r.code, 0, "saveStation did not complete\n" + r.out)
 })
 
+test("out-of-range settings are clamped to the schema's bounds (#25)", { skip }, () => {
+  // A hand-edited shell.json is not held to the settings UI's min and max.
+  // Each of these is outside its schema range, or not a number at all.
+  const r = runService(
+    "Service.attach({});" +
+    " Service.configure({ pollIntervalOpenSec: 0, pollIntervalIdleSec: 100000," +
+    " alertsIntervalSec: 0, staleAfterSec: -1, trainsPerDirection: '5' })",
+    "Service.openInterval === 10 && Service.idleInterval === 600" +
+    " && Service.alertsInterval === 60 && Service.staleAfterSec === 60" +
+    " && Service.trainsPerDirection === 3 && Service.pollIntervalMs === 600000")
+  assert.equal(r.code, 0, "a setting escaped its bounds\n" + r.out)
+})
+
 // The widget's half of #15, which the tests above cannot see: they call
 // Service.configure() themselves, so they pass whether or not Panel.qml ever
 // does. Loading Panel.qml for real needs the bar's own Ui components, so these

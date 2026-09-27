@@ -24,7 +24,8 @@ test("Service.qml's setting() fallbacks match the manifest defaults", () => {
   // The one surviving cross-file drift risk. A one-sided edit here fails
   // silently at runtime -- the widget just quietly uses a different number.
   for (const [key, value] of Object.entries(manifest.barWidget.defaults)) {
-    const re = new RegExp(`setting\\(\\s*"${key}"\\s*,\\s*([^)]+?)\\s*\\)`)
+    // setting() for the booleans, boundedSetting() for the numbers (#25).
+    const re = new RegExp(`(?:setting|boundedSetting)\\(\\s*"${key}"\\s*,\\s*([^,)]+?)\\s*[,)]`)
     const m = serviceQml.match(re)
     assert.ok(m, `Service.qml reads setting("${key}", ...)`)
     assert.equal(m[1].trim(), JSON.stringify(value),
@@ -39,11 +40,28 @@ test("every setting Service.qml reads is declared in the manifest", () => {
   // and a one-letter typo on either side looks exactly the same.
   const source = serviceQml.replace(/(^|\s)\/\/.*$/gm, "$1")
   const schemaKeys = manifest.barWidget.schema.map(entry => entry.key)
-  const read = [...source.matchAll(/setting\(\s*"([A-Za-z]+)"/g)].map(m => m[1])
+  const read = [...source.matchAll(/(?:setting|boundedSetting)\(\s*"([A-Za-z]+)"/g)].map(m => m[1])
   assert.ok(read.length > 0, "found no setting() reads -- has the accessor been renamed?")
   for (const key of read) {
     assert.ok(key in manifest.barWidget.defaults, `${key} has a manifest default`)
     assert.ok(schemaKeys.includes(key), `${key} has a schema entry`)
+  }
+})
+
+test("every numeric setting is clamped to the bounds its schema declares (#25)", () => {
+  // The settings UI enforces the schema's min and max; a hand-edited
+  // shell.json does not. So Service.qml clamps to the same bounds, and this
+  // keeps the two copies of each bound from drifting: an alertsIntervalSec of
+  // 0 was a 0 ms repeating timer inside the shared shell.
+  const source = serviceQml.replace(/(^|\s)\/\/.*$/gm, "$1")
+  const numeric = manifest.barWidget.schema.filter(e => e.type === "integer")
+  assert.ok(numeric.length > 0)
+  for (const entry of numeric) {
+    const re = new RegExp(`boundedSetting\\(\\s*"${entry.key}"\\s*,\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*,\\s*(-?\\d+)\\s*\\)`)
+    const m = source.match(re)
+    assert.ok(m, `${entry.key} is read through boundedSetting(key, fallback, min, max)`)
+    assert.equal(Number(m[2]), entry.min, `${entry.key} min matches the schema`)
+    assert.equal(Number(m[3]), entry.max, `${entry.key} max matches the schema`)
   }
 })
 
