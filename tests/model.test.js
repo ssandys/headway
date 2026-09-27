@@ -1054,3 +1054,95 @@ test("clampInt falls back on anything that is not a finite number (#25)", () => 
     assert.equal(Model.clampInt(v, 90, 30, 600), 90, JSON.stringify(v) + " must fall back")
   })
 })
+
+// ---- which alerts notify (#23) ----------------------------------------------
+//
+// Every saved station's routes are tracked, whichever one is active. An alert
+// notifies when it is NEW on a route that was already being tracked; one that
+// was already running when its route started being tracked -- at startup, or
+// when a station is saved -- is absorbed silently. That is what stops a
+// station switch or a save from replaying days-old alerts as a burst.
+
+const liveAlert = (id, routes, type) =>
+  ({ id: id, alertType: type || "Delays", routes: routes, periods: [], headerText: id })
+const ids = (list) => list.map((a) => a.id)
+
+test("routesOfStations is every saved station's routes, each once", () => {
+  assert.deepEqual(Model.routesOfStations([
+    { routes: ["2", "3", "4", "5"] }, { routes: ["4", "5", "6"] }, { routes: ["1"] }
+  ]), ["2", "3", "4", "5", "6", "1"])
+  assert.deepEqual(Model.routesOfStations([]), [])
+})
+
+test("with nothing tracked yet, every live alert is absorbed, not notified", () => {
+  // The first poll after startup: all of it is backlog.
+  const r = Model.alertNotifications(["6"], [], [liveAlert("a", ["6"])], NOW, {})
+  assert.deepEqual(r.fresh, [])
+  assert.ok(Object.prototype.hasOwnProperty.call(r.seen, "a:a"))
+})
+
+test("a new alert on a route already tracked notifies, once", () => {
+  const seen = Model.alertNotifications(["6"], [], [liveAlert("a", ["6"])], NOW, {}).seen
+  const alerts = [liveAlert("a", ["6"]), liveAlert("b", ["6"])]
+  const r = Model.alertNotifications(["6"], ["6"], alerts, NOW, seen)
+  assert.deepEqual(ids(r.fresh), ["b"])
+  assert.deepEqual(Model.alertNotifications(["6"], ["6"], alerts, NOW, r.seen).fresh, [],
+                   "and not again on the next poll")
+})
+
+test("an alert already running on a NEWLY tracked route is absorbed (#23)", () => {
+  // Saving a station whose line has had delays for days: silence, not a burst.
+  const r = Model.alertNotifications(["6", "L"], ["6"], [liveAlert("c", ["L"])], NOW, {})
+  assert.deepEqual(r.fresh, [])
+  assert.ok(Object.prototype.hasOwnProperty.call(r.seen, "a:c"))
+})
+
+test("an unseen alert touching a tracked AND a new route notifies", () => {
+  // It could not have been running unseen on the tracked route, so it is new.
+  const r = Model.alertNotifications(["6", "L"], ["6"], [liveAlert("d", ["6", "L"])], NOW, {})
+  assert.deepEqual(ids(r.fresh), ["d"])
+})
+
+test("alerts notify for every tracked route, not just the active station's (#23)", () => {
+  // The routes passed in are the UNION of saved stations; nothing here knows
+  // which is active, which is the point.
+  const r = Model.alertNotifications(["2", "6"], ["2", "6"], [liveAlert("e", ["2"])], NOW, {})
+  assert.deepEqual(ids(r.fresh), ["e"])
+})
+
+test("only amber and red alerts notify, but every live one is remembered", () => {
+  const alerts = [liveAlert("i", ["6"], "Station Notice"), liveAlert("p", ["6"], "Planned - Part Suspended"),
+                  liveAlert("r", ["6"], "No Scheduled Service")]
+  const r = Model.alertNotifications(["6"], ["6"], alerts, NOW, {})
+  assert.deepEqual(ids(r.fresh), ["r"])
+  ;["a:i", "a:p", "a:r"].forEach((k) => assert.ok(Object.prototype.hasOwnProperty.call(r.seen, k), k))
+})
+
+test("an alert matches its route's express variant, as alertsFor does", () => {
+  const r = Model.alertNotifications(["6"], ["6"], [liveAlert("x", ["6X"])], NOW, {})
+  assert.deepEqual(ids(r.fresh), ["x"])
+})
+
+test("seen is pruned to alerts still in the feed", () => {
+  // It used to grow for the life of the shell. An alert that is still in the
+  // feed but outside its active period stays remembered, so it does not
+  // notify again when its next period starts.
+  const later = { id: "q", alertType: "Delays", routes: ["6"], headerText: "q",
+                  periods: [{ start: NOW + 3600, end: NOW + 7200 }] }
+  const r = Model.alertNotifications(["6"], ["6"], [later], NOW, { "a:gone": true, "a:q": true })
+  assert.ok(!Object.prototype.hasOwnProperty.call(r.seen, "a:gone"), "a vanished alert is forgotten")
+  assert.ok(Object.prototype.hasOwnProperty.call(r.seen, "a:q"), "a dormant one is not")
+})
+
+test("alertNotifications leaves the seen map it was given untouched", () => {
+  const seen = {}
+  Model.alertNotifications(["6"], [], [liveAlert("a", ["6"])], NOW, seen)
+  assert.deepEqual(seen, {})
+})
+
+test("a prototype-chain alert id is an ordinary one", () => {
+  const alerts = [liveAlert("__proto__", ["6"]), liveAlert("constructor", ["6"])]
+  const first = Model.alertNotifications(["6"], ["6"], alerts, NOW, {})
+  assert.deepEqual(ids(first.fresh), ["__proto__", "constructor"])
+  assert.deepEqual(Model.alertNotifications(["6"], ["6"], alerts, NOW, first.seen).fresh, [])
+})

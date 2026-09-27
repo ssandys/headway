@@ -13,7 +13,7 @@ happened on this branch, not advice.
 | `Model.js` | Arrival assembly, alert classification, bar state, all display formatting, and alert text as layout runs (`alertRuns`) for Panel.qml to lay out | same |
 | `Fetch.js` | The curl argv, the error text a curl exit code becomes, and how long to wait after a failed poll | same |
 | `State.js` | The saved-stations file: the argv that reads and writes it, what its contents are allowed to be (`validStation`, `parseState`), and what a failed write cost the user | same |
-| `Service.qml` | I/O only, and a SINGLETON shared by every bar surface: `curl` polling, shell-mediated state file, `notify-send`. One of each, however many monitors | **The live shell only** |
+| `Service.qml` | I/O only, and a SINGLETON shared by every bar surface: `curl` polling, shell-mediated state file, `notify-send`. One of each, however many monitors | `tests/service.test.js`, which runs it under real Quickshell with a scratch HOME and a PATH holding only what a test puts there (the real `dd`, a fake `curl` or `notify-send`) -- otherwise the live shell |
 | `Panel.qml` | Rendering only: the bar button, its badge, the panel | **The live shell only** |
 | `RouteBullet.qml` | One MTA route bullet — disc for local, diamond for express | **The live shell only** |
 
@@ -86,6 +86,7 @@ you reintroduce this bug and no test in this repo will tell you.
 |---|---|
 | **`Process` spawn failure** | A failed spawn does not emit `exited()`. Use `onRunningChanged` to drain the queue, or a missing `notify-send` hangs it. |
 | **`Process.command` while running** | Assigning it mid-run is ignored. Queue instead. |
+| **`running` lags `running = true`** | MEASURED: it still reads `false` straight after the assignment; the process starts on the next pass of the event loop. So `if (proc.running) return` cannot guard a queue within one tick -- a second start in the same tick overwrites the first's `command`, and of three notifications raised by one poll only the last was sent. Track a `busy` flag set at start and cleared in `onRunningChanged` (a failed spawn still emits `runningChanged(false)`). |
 | **Caller-owned diff state** | Notification diffing state belongs to the caller, not the module. |
 | **`BAR_GLYPH` is built, never typed** | `String.fromCodePoint(0xF1308)`. A literal astral character does not survive every editing path, and the failure mode is an invisible widget with nothing logged. The guard asserts the *codepoint*, because a shape check passes just as happily on a typo. |
 | **ES3 reserved words** | Avoid them as property names in the pure modules. |
