@@ -65,8 +65,12 @@ function readArgs(statePath, byteLimit) {
 //                     guessed name unusable
 //   conv=nocreat      a temp file unlinked mid-flight is not recreated
 //   conv=fsync        the bytes are on disk before the rename publishes them
-//   mv -f             rename(2), which replaces a symlinked DESTINATION rather
-//                     than writing through it
+//   mv -fT            rename(2), which replaces a symlinked DESTINATION rather
+//                     than writing through it. -T is what makes that true of a
+//                     link to a DIRECTORY too, and of a directory itself: plain
+//                     mv treats either as a folder to move INTO, so every save
+//                     exited 0 and dropped the station list inside it (#20).
+//                     With -T a link is replaced and a real directory fails
 //
 // Cleanup is explicit rather than a trap, which keeps the quoting legible: on
 // either failure the temp file is removed, so a failed write leaves no
@@ -77,7 +81,7 @@ function writeArgs(statePath, payload) {
     't=$(mktemp -- "$d/.headway.json.XXXXXXXX") || exit 1; ' +
     'printf %s "$2" | dd of="$t" conv=nocreat,fsync oflag=nofollow status=none ' +
     '|| { rm -f -- "$t"; exit 1; }; ' +
-    'mv -f -- "$t" "$p" || { rm -f -- "$t"; exit 1; }'
+    'mv -fT -- "$t" "$p" || { rm -f -- "$t"; exit 1; }'
   return ["sh", "-c", script, "headway-write", statePath, payload]
 }
 

@@ -137,6 +137,30 @@ test("write replaces a symlinked destination instead of writing through it", () 
   assert.ok(!fs.lstatSync(p).isSymbolicLink(), "the link itself must have been replaced")
 })
 
+test("write replaces a symlink to a DIRECTORY instead of writing into it (#20)", () => {
+  // Plain `mv -f` treats a directory destination -- including one reached
+  // through a symlink -- as a folder to move INTO. Every save exited 0 and
+  // dropped a mode-0600 copy of the station list inside the target.
+  const d = tmpdir(), p = path.join(d, "headway.json")
+  const victim = path.join(d, "victim")
+  fs.mkdirSync(victim)
+  fs.symlinkSync(victim, p)
+  assert.equal(writeFile(p, "NEW").code, 0)
+  assert.deepEqual(fs.readdirSync(victim), [], "nothing may land inside the target")
+  assert.ok(fs.lstatSync(p).isFile(), "the link itself must have been replaced by the file")
+  assert.equal(readFile(p), "NEW")
+})
+
+test("write fails, and says so, when the state path is a real directory (#20)", () => {
+  // A directory cannot be replaced by rename(2). The save must fail -- so the
+  // user is told -- and must leave no temp file behind in either place.
+  const d = tmpdir(), p = path.join(d, "headway.json")
+  fs.mkdirSync(p)
+  assert.notEqual(writeFile(p, "NEW").code, 0, "a save that went nowhere must not report success")
+  assert.deepEqual(fs.readdirSync(p), [], "nothing may land inside the directory")
+  assert.deepEqual(fs.readdirSync(d), ["headway.json"], "and no temp file left beside it")
+})
+
 test("write treats shell metacharacters in the payload as literal text", () => {
   const d = tmpdir(), p = path.join(d, "headway.json")
   const hostile = '{"name":"$(whoami) `id` ;rm -rf / \\"quoted\\" \'single\'"}'
