@@ -65,8 +65,12 @@ function readArgs(statePath, byteLimit) {
 //                     guessed name unusable
 //   conv=nocreat      a temp file unlinked mid-flight is not recreated
 //   conv=fsync        the bytes are on disk before the rename publishes them
-//   mv -f             rename(2), which replaces a symlinked DESTINATION rather
-//                     than writing through it
+//   mv -fT            rename(2), which replaces a symlinked DESTINATION rather
+//                     than writing through it. -T is what makes that true of a
+//                     link to a DIRECTORY too, and of a directory itself: plain
+//                     mv treats either as a folder to move INTO, so every save
+//                     exited 0 and dropped the station list inside it (#20).
+//                     With -T a link is replaced and a real directory fails
 //
 // Cleanup is explicit rather than a trap, which keeps the quoting legible: on
 // either failure the temp file is removed, so a failed write leaves no
@@ -77,7 +81,7 @@ function writeArgs(statePath, payload) {
     't=$(mktemp -- "$d/.headway.json.XXXXXXXX") || exit 1; ' +
     'printf %s "$2" | dd of="$t" conv=nocreat,fsync oflag=nofollow status=none ' +
     '|| { rm -f -- "$t"; exit 1; }; ' +
-    'mv -f -- "$t" "$p" || { rm -f -- "$t"; exit 1; }'
+    'mv -fT -- "$t" "$p" || { rm -f -- "$t"; exit 1; }'
   return ["sh", "-c", script, "headway-write", statePath, payload]
 }
 
@@ -127,7 +131,20 @@ function validStation(e, fieldLimit) {
     if (e.routes[i].length > fieldLimit) return false
   }
   if (e.name !== undefined && typeof e.name !== "string") return false
+  // Bounded like every other field (#21). The longest real station name is 34
+  // characters, so the limit rejects nothing a picker could have saved.
+  if (e.name !== undefined && e.name.length > fieldLimit) return false
   return true
+}
+
+// A validated entry, rebuilt from the fields a station HAS (#21). Keeping the
+// parsed object whole let anything else in the file ride into root.stations
+// and be written back out on the next save -- which is how 60 KB of junk under
+// the read cap became a save too large for execve.
+function cleanStation(e) {
+  var out = { stopId: e.stopId, direction: e.direction, routes: e.routes.slice() }
+  if (e.name !== undefined) out.name = e.name
+  return out
 }
 
 // Turns the file's TEXT into the two properties Service.qml holds, or into
@@ -167,7 +184,7 @@ function parseState(text, limits) {
         var key = "id:" + raw[i].stopId
         if (Object.prototype.hasOwnProperty.call(seen, key)) continue
         seen[key] = true
-        loaded.push(raw[i])
+        loaded.push(cleanStation(raw[i]))
       }
       if (typeof data.activeStationId === "string" &&
           data.activeStationId.length <= limits.fieldLimit) {
@@ -190,12 +207,43 @@ function parseState(text, limits) {
   return { stations: loaded, activeStationId: active }
 }
 
+// The bytes of `text` once encoded as UTF-8, which is what the reader's cap
+// counts. String length counts UTF-16 units, and "é" is one unit but two bytes.
+function utf8Length(text) {
+  var n = 0
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i)
+    if (c < 0x80) n = n + 1
+    else if (c < 0x800) n = n + 2
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length &&
+             text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff) {
+      n = n + 4
+      i = i + 1
+    } else n = n + 3
+  }
+  return n
+}
+
+// The file's contents for a save, or "" when they could not be read back
+// (#21). readArgs stops at byteLimit bytes, so a longer file would load as
+// truncated JSON and lose every station on the next start; refusing it keeps
+// the one invariant that matters -- what is written, reads back. It also keeps
+// the payload, which travels as one argv string to sh, far below Linux's
+// 128 KiB MAX_ARG_STRLEN, past which execve itself fails.
+function serializeState(activeStationId, stations, byteLimit) {
+  var text = JSON.stringify({
+    version: 1, activeStationId: activeStationId, stations: stations
+  }, null, 2) + "\n"
+  return utf8Length(text) <= byteLimit ? text : ""
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     readArgs: readArgs,
     writeArgs: writeArgs,
     writeErrorText: writeErrorText,
     validStation: validStation,
-    parseState: parseState
+    parseState: parseState,
+    serializeState: serializeState
   }
 }

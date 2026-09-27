@@ -75,11 +75,17 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
-  readonly property int openInterval: setting("pollIntervalOpenSec", 30)
-  readonly property int idleInterval: setting("pollIntervalIdleSec", 90)
-  readonly property int alertsInterval: setting("alertsIntervalSec", 300)
-  readonly property int staleAfterSec: setting("staleAfterSec", 180)
-  readonly property int trainsPerDirection: setting("trainsPerDirection", 3)
+  // A numeric setting within its manifest schema's min and max (#25), which
+  // tests/manifest.test.js holds these literals to.
+  function boundedSetting(key, fallback, min, max) {
+    return Model.clampInt(setting(key, fallback), fallback, min, max)
+  }
+
+  readonly property int openInterval: boundedSetting("pollIntervalOpenSec", 30, 10, 120)
+  readonly property int idleInterval: boundedSetting("pollIntervalIdleSec", 90, 30, 600)
+  readonly property int alertsInterval: boundedSetting("alertsIntervalSec", 300, 60, 1800)
+  readonly property int staleAfterSec: boundedSetting("staleAfterSec", 180, 60, 900)
+  readonly property int trainsPerDirection: boundedSetting("trainsPerDirection", 3, 1, 6)
   readonly property bool notifyRouteAlert: setting("notifyRouteAlert", true)
   readonly property bool notifyFeedStale: setting("notifyFeedStale", true)
   // The poll timer's LIVE interval, read-only, for tests/service.test.js: the
@@ -115,6 +121,7 @@ Item {
     // Process: that starts it during component construction, before statePath
     // and the collector are necessarily bound.
     stateReader.running = true
+    weatherReader.running = true
   }
 
   readonly property var saved: {
@@ -167,8 +174,8 @@ Item {
   // it. FileView cannot help: its whole API is blockWrites, atomicWrites,
   // watchChanges, adapter, path, text, data, preload, loaded, blockLoading,
   // blockAllReads and printErrors. No size cap, no stat, no symlink control.
-  // Quickshell exports no filesystem primitive either. So the read is bounded
-  // outside QML and the write keeps FileView for its atomic rename.
+  // Quickshell exports no filesystem primitive either. So both the read and the
+  // write go outside QML, through State.js -- and so does weather.json's read.
   readonly property string statePath:
     Quickshell.env("HOME") + "/.local/state/omarchy/settings/headway.json"
 
@@ -299,10 +306,19 @@ Item {
   // No selfWrites counter any more: it existed only to swallow the watcher
   // events our own writes caused, and nothing watches this file now. That also
   // retires the cumulative-stranding bug it had (open issue N9).
+  //
+  // A list too large to read back is refused rather than written (#21): the
+  // stations stay in memory for this session, and the journal says why they
+  // will not survive a restart.
   function writeState() {
-    root.pendingWrite = JSON.stringify({
-      version: 1, activeStationId: root.activeStationId, stations: root.stations
-    }, null, 2) + "\n"
+    var text = State.serializeState(root.activeStationId, root.stations,
+                                    root.stateByteLimit)
+    if (text === "") {
+      console.warn("headway: the station list is over " + root.stateByteLimit
+                   + " bytes and was not saved")
+      return
+    }
+    root.pendingWrite = text
     root.flushState()
   }
 
@@ -632,6 +648,9 @@ Item {
     // is here because the state writer documents the same trap.
     if (alertsFetcher.running) return
     alertsFetcher.sawExit = false
+    alertsFetcher.sawStream = false
+    alertsFetcher.exitCode = 0
+    alertsFetcher.payload = null
     alertsFetcher.command = Fetch.curlArgs(Gtfs.ALERTS_URL, root.feedByteLimit,
                                            root.feedTimeoutSec)
     alertsFetcher.running = true
@@ -665,42 +684,68 @@ Item {
   Process {
     id: alertsFetcher
     running: false
-    // Reset by refreshAlerts immediately before each spawn. Same role as the
-    // state writer's: an exit that never arrives is a spawn that never
-    // happened, which is the one failure curl cannot report on stderr.
+    // Reset by refreshAlerts immediately before each spawn.
+    //
+    // The OUTCOME needs both the exit code and the body, and exited() and
+    // streamFinished() arrive in no guaranteed order -- the feed delegates
+    // above document the same. The body used to be decoded on arrival
+    // whatever the exit code, but curl streams to stdout as bytes arrive, so a
+    // timeout (28) partway through left part of a feed there, and a cut on an
+    // entity boundary decodes cleanly: the alert list silently became part of
+    // itself. Now only a fetch that exited 0 is decoded.
     property bool sawExit: false
+    property bool sawStream: false
+    property int exitCode: 0
+    property var payload: null
+
+    function settle() {
+      if (!alertsFetcher.sawExit || !alertsFetcher.sawStream) return
+      if (alertsFetcher.exitCode === 0) root.absorbAlerts(alertsFetcher.payload)
+      root.settleAlerts(alertsFetcher.exitCode)
+    }
     onExited: function (code) {
+      alertsFetcher.exitCode = code
       alertsFetcher.sawExit = true
-      root.settleAlerts(code)
+      alertsFetcher.settle()
     }
     onRunningChanged: {
       if (alertsFetcher.running) return
       Qt.callLater(alertsFetcher.reportFailedSpawn)
     }
+    // A failed spawn emits neither exited() nor a stream, so both are
+    // synthesised: exit 127, and no body.
     function reportFailedSpawn() {
       if (alertsFetcher.sawExit) return
-      root.settleAlerts(127)
+      alertsFetcher.exitCode = 127
+      alertsFetcher.sawExit = true
+      alertsFetcher.sawStream = true
+      alertsFetcher.settle()
     }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        // Empty stdout is how a curl failure arrives here, since --fail makes
-        // an HTTP error a code rather than a body. Nothing to decode, and
-        // nothing to report: the previous alerts stand.
-        if (!data || data.byteLength === 0) return
-        if (data.byteLength > root.feedByteLimit) return
-        try {
-          var decoded = Gtfs.decodeAlerts(new Uint8Array(data))
-          root.alerts = decoded.alerts
-          root.checkNewAlerts()
-        } catch (e) {
-          // keep the last good alerts
-        }
+        alertsFetcher.payload = data
+        alertsFetcher.sawStream = true
+        alertsFetcher.settle()
       }
     }
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: if (text.length) console.warn("headway: curl (alerts): " + text)
+    }
+  }
+
+  // A body from a fetch that exited 0. Alerts are advisory: an empty, oversized
+  // or undecodable one leaves the previous list standing.
+  function absorbAlerts(data) {
+    if (!data || data.byteLength === 0) return
+    if (data.byteLength > root.feedByteLimit) return
+    try {
+      var decoded = Gtfs.decodeAlerts(new Uint8Array(data))
+      root.alerts = decoded.alerts
+      root.checkNewAlerts()
+    } catch (e) {
+      // keep the last good alerts
     }
   }
 
@@ -846,21 +891,28 @@ Item {
   // Setup convenience only: read once, never on a timer.
   property var origin: null
 
-  FileView {
-    id: weatherFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/weather.json"
-    printErrors: false
-    onLoaded: {
-      try {
-        var w = JSON.parse(weatherFile.text())
-        // typeof, not falsy. Latitude 0 (the equator) and longitude 0 (the
-        // prime meridian) are real coordinates, and this branch is the same
-        // rule Model.distanceText already states explicitly.
-        if (typeof w.latitude === "number" && typeof w.longitude === "number") {
-          root.origin = { lat: w.latitude, lon: w.longitude }
-        }
-      } catch (e) { root.origin = null }
+  // weather.json sits at a predictable path in the same directory as
+  // headway.json, so it gets the same read: bounded, symlink-refusing and
+  // FIFO-proof, through State.readArgs. It used to be a FileView, which
+  // follows links and reads without bound -- the unbounded read the
+  // marketplace review flagged for the state file, left standing here after
+  // that one was replaced. omarchy-weather-location writes a name and two
+  // coordinates, so 4 KiB is generous; a longer file truncates, fails to
+  // parse, and leaves origin unset.
+  readonly property string weatherPath:
+    Quickshell.env("HOME") + "/.local/state/omarchy/settings/weather.json"
+  readonly property int weatherByteLimit: 4096
+
+  Process {
+    id: weatherReader
+    running: false
+    command: State.readArgs(root.weatherPath, root.weatherByteLimit)
+    // dd names a missing file here; no weather location is not an error.
+    stderr: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.origin = Stations.originFromWeather(text)
     }
-    onLoadFailed: root.origin = null
   }
 }
+

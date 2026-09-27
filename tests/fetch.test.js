@@ -23,6 +23,36 @@ test("curlArgs pins the protocol and refuses to follow redirects", () => {
   assert.ok(args.includes("--fail"), "an HTTP error must be an exit code, not a body")
 })
 
+test("curlArgs ignores the user's ~/.curlrc (#24)", () => {
+  // `-q` only works as the FIRST argument; anywhere else curl has already read
+  // the file. A .curlrc with `include`, `output` or `location` otherwise
+  // reshapes every feed fetch -- `include` alone puts headers in front of the
+  // protobuf, and every feed then reads as unreachable.
+  const args = Fetch.curlArgs("https://example.com/feed", 4194304, 15)
+  assert.equal(args[1], "-q")
+})
+
+test("a planted .curlrc really has no effect on the fetch", () => {
+  // Executed, not just inspected: a .curlrc adding a write-out sentinel, and a
+  // fetch aimed at a closed local port so nothing leaves the machine. curl
+  // prints --write-out even for a failed transfer, so a read .curlrc shows.
+  const fs = require("node:fs"), os = require("node:os"), path = require("node:path")
+  const { spawnSync } = require("node:child_process")
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "headway-curlrc-"))
+  try {
+    fs.writeFileSync(path.join(home, ".curlrc"), 'write-out = "CURLRC-WAS-READ"\n')
+    const args = Fetch.curlArgs("https://127.0.0.1:9/feed", 4194304, 5)
+    const r = spawnSync(args[0], args.slice(1), {
+      encoding: "utf8", timeout: 10000,
+      env: Object.assign({}, process.env, { CURL_HOME: home, HOME: home })
+    })
+    assert.ok(!(r.stdout || "").includes("CURLRC-WAS-READ"), "the .curlrc was applied")
+    assert.notEqual(r.status, 0, "the closed port must still fail")
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test("curlArgs refuses a url that is not https", () => {
   assert.equal(Fetch.curlArgs("http://example.com/feed", 4194304, 15), null)
   assert.equal(Fetch.curlArgs("file:///etc/passwd", 4194304, 15), null)

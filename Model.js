@@ -604,6 +604,20 @@ function toggleRoute(all, picked, route) {
 // The panel header's right-hand slot. Kept here rather than inline in the QML
 // so the wording and the stale boundary are unit-tested -- the same reason
 // barState and tooltipText live in this file.
+// A numeric setting, clamped to the bounds its manifest schema declares (#25).
+// The settings UI enforces those bounds; a hand-edited shell.json does not, and
+// an alertsIntervalSec of 0 was a 0 ms repeating Timer inside the shared shell.
+// Anything that is not a finite number -- "45" as a string included -- is the
+// fallback rather than a guess at what was meant. tests/manifest.test.js holds
+// Service.qml's bounds to the schema's, so the two cannot drift.
+function clampInt(value, fallback, min, max) {
+  if (typeof value !== "number" || !isFinite(value)) return fallback
+  var n = Math.round(value)
+  if (n < min) return min
+  if (n > max) return max
+  return n
+}
+
 function feedAgeText(feedTimestamp, nowSec, staleAfterSec) {
   if (!feedTimestamp || feedTimestamp <= 0) return ""
   // Clamped at zero. nowSec is the LOCAL clock and feedTimestamp is the MTA's,
@@ -721,6 +735,7 @@ function tooltipText(snapshot, nowSec) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    clampInt: clampInt,
     normalizeRoute: normalizeRoute,
     isExpress: isExpress,
     dedupeTrips: dedupeTrips,

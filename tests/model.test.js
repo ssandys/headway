@@ -1031,3 +1031,26 @@ test("alertsForDisplay carries runs beside the strings, changing neither", () =>
   assert.equal(out.headerRuns[0][1].v, "6")
   assert.equal(out.descriptionRuns[0][0].v.codePointAt(0), 0xF207)
 })
+
+// ---- setting bounds (#25) ---------------------------------------------------
+
+test("clampInt keeps an in-range value", () => {
+  assert.equal(Model.clampInt(45, 90, 30, 600), 45)
+})
+
+test("clampInt pins a value to the nearer bound (#25)", () => {
+  // 0 is the plausible hand-edit: a 0 ms repeating Timer in the shared shell.
+  assert.equal(Model.clampInt(0, 300, 60, 1800), 60)
+  assert.equal(Model.clampInt(-5, 300, 60, 1800), 60)
+  assert.equal(Model.clampInt(99999, 300, 60, 1800), 1800)
+})
+
+test("clampInt rounds, because every setting it bounds is a whole number", () => {
+  assert.equal(Model.clampInt(45.6, 90, 30, 600), 46)
+})
+
+test("clampInt falls back on anything that is not a finite number (#25)", () => {
+  ;["45", "", null, undefined, true, NaN, Infinity, {}, []].forEach(function (v) {
+    assert.equal(Model.clampInt(v, 90, 30, 600), 90, JSON.stringify(v) + " must fall back")
+  })
+})

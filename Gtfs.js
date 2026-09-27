@@ -12,7 +12,20 @@
 // Varints are accumulated by MULTIPLICATION, not by `<<`. JavaScript's bitwise
 // operators truncate to 32 bits, and feed timestamps are ~1.79e9 seconds and
 // climbing -- a `<<`-based reader silently returns garbage for them.
-function readVarint(bytes, pos) {
+//
+// `end` bounds the read to the enclosing message (#27). Bounded by the buffer
+// alone, a varint inside a nested message read on into its PARENT's bytes and
+// the walk then ended quietly. Omitted, it is the buffer's end.
+//
+// At most ten bytes, which is all a 64-bit varint can be. Past that `scale`
+// reaches Infinity, `value` becomes NaN, and every `stop > end` check is false
+// for NaN -- so a run of continuation bytes silently dropped the rest of the
+// message instead of throwing.
+var VARINT_MAX_BYTES = 10
+
+function readVarint(bytes, pos, end) {
+  var limit = end === undefined ? bytes.length : end
+  var first = pos
   var value = 0
   var scale = 1
   for (;;) {
@@ -20,8 +33,11 @@ function readVarint(bytes, pos) {
     // `undefined & 0x80` is 0 -- so EOF reads as a valid terminator and the
     // function returns a plausible-looking wrong number instead of failing.
     // A truncated HTTP response is a realistic input here.
-    if (pos >= bytes.length) {
+    if (pos >= limit) {
       throw new Error("gtfs: varint runs past the end of the buffer")
+    }
+    if (pos - first >= VARINT_MAX_BYTES) {
+      throw new Error("gtfs: varint too long")
     }
     var b = bytes[pos]
     pos = pos + 1
@@ -35,13 +51,13 @@ function readVarint(bytes, pos) {
 // skipGroup -- walkFields needs the payload itself, so it does its own bounds
 // checks with field-specific messages.
 function skipValue(bytes, pos, end, wire) {
-  if (wire === 0) return readVarint(bytes, pos)[1]
+  if (wire === 0) return readVarint(bytes, pos, end)[1]
   if (wire === 1) {
     if (pos + 8 > end) throw new Error("gtfs: fixed64 runs past the end of the buffer")
     return pos + 8
   }
   if (wire === 2) {
-    var lp = readVarint(bytes, pos)
+    var lp = readVarint(bytes, pos, end)
     var stop = lp[1] + lp[0]
     if (stop > end) {
       throw new Error("gtfs: length-delimited field runs past the end of the buffer")
@@ -67,7 +83,7 @@ function skipGroup(bytes, pos, end, groupField) {
     if (pos >= end) {
       throw new Error("gtfs: unterminated group for field " + groupField)
     }
-    var tagPair = readVarint(bytes, pos)
+    var tagPair = readVarint(bytes, pos, end)
     pos = tagPair[1]
     var wire = tagPair[0] % 8
     if (wire === 3) {
@@ -86,17 +102,17 @@ function skipGroup(bytes, pos, end, groupField) {
 function walkFields(bytes, start, end, visit) {
   var pos = start
   while (pos < end) {
-    var tagPair = readVarint(bytes, pos)
+    var tagPair = readVarint(bytes, pos, end)
     var tag = tagPair[0]
     pos = tagPair[1]
     var field = Math.floor(tag / 8)
     var wire = tag % 8
     if (wire === 0) {
-      var v = readVarint(bytes, pos)
+      var v = readVarint(bytes, pos, end)
       pos = v[1]
       visit(field, wire, v[0], -1, -1)
     } else if (wire === 2) {
-      var lp = readVarint(bytes, pos)
+      var lp = readVarint(bytes, pos, end)
       pos = lp[1]
       var stop = pos + lp[0]
       // A declared length longer than the remaining buffer would otherwise
@@ -144,29 +160,83 @@ function walkFields(bytes, start, end, visit) {
   }
 }
 
-// QML's engine has no TextDecoder, so UTF-8 is decoded by hand.
+// QML's engine has no TextDecoder, so UTF-8 is decoded by hand -- to the same
+// rules TextDecoder follows (the WHATWG decoder), which tests/gtfs.test.js
+// checks it against on twenty thousand random byte strings.
+//
+// It NEVER THROWS (#18). An invalid byte becomes U+FFFD and decoding carries
+// on. The old decoder took every lead byte >= 0xF0 as four bytes and passed the
+// result to String.fromCodePoint unchecked, which throws above 0x10FFFF -- and
+// Service.qml turns any decode throw into "feed unreachable", so ONE corrupt
+// byte in any stop id or alert string discarded a feed that had returned 200
+// with good data. A string field is the wrong place to fail a whole feed.
+//
+// It also never reads past `end`. A sequence the range cuts short is invalid,
+// not a reason to borrow the next field's bytes, which the old decoder did.
+//
+// The shape is the spec's: a lead byte fixes how many continuation bytes
+// follow and the legal range of the FIRST of them (E0, ED, F0 and F4 narrow it,
+// which is what rules out overlong forms, surrogates and anything above
+// 0x10FFFF). A byte outside that range ends the sequence with one U+FFFD and
+// is then read again as a lead byte in its own right.
+var REPLACEMENT = String.fromCharCode(0xfffd)
+
 function utf8(bytes, start, end) {
   var out = ""
+  var cp = 0
+  var needed = 0
+  var seen = 0
+  var lower = 0x80
+  var upper = 0xbf
   var i = start
   while (i < end) {
-    var c = bytes[i]
-    if (c < 0x80) {
-      out = out + String.fromCharCode(c)
+    var b = bytes[i]
+    if (needed === 0) {
       i = i + 1
-    } else if (c < 0xe0) {
-      out = out + String.fromCharCode(((c & 0x1f) * 64) + (bytes[i + 1] & 0x3f))
-      i = i + 2
-    } else if (c < 0xf0) {
-      out = out + String.fromCharCode(
-        ((c & 0x0f) * 4096) + ((bytes[i + 1] & 0x3f) * 64) + (bytes[i + 2] & 0x3f))
-      i = i + 3
-    } else {
-      var cp = ((c & 0x07) * 262144) + ((bytes[i + 1] & 0x3f) * 4096) +
-               ((bytes[i + 2] & 0x3f) * 64) + (bytes[i + 3] & 0x3f)
-      out = out + String.fromCodePoint(cp)
-      i = i + 4
+      if (b < 0x80) {
+        out = out + String.fromCharCode(b)
+      } else if (b >= 0xc2 && b <= 0xdf) {
+        needed = 1
+        cp = b & 0x1f
+      } else if (b >= 0xe0 && b <= 0xef) {
+        if (b === 0xe0) lower = 0xa0
+        if (b === 0xed) upper = 0x9f
+        needed = 2
+        cp = b & 0x0f
+      } else if (b >= 0xf0 && b <= 0xf4) {
+        if (b === 0xf0) lower = 0x90
+        if (b === 0xf4) upper = 0x8f
+        needed = 3
+        cp = b & 0x07
+      } else {
+        out = out + REPLACEMENT
+      }
+      continue
+    }
+    if (b < lower || b > upper) {
+      // Not consumed: this byte starts over as a lead byte.
+      out = out + REPLACEMENT
+      cp = 0
+      needed = 0
+      seen = 0
+      lower = 0x80
+      upper = 0xbf
+      continue
+    }
+    i = i + 1
+    lower = 0x80
+    upper = 0xbf
+    cp = cp * 64 + (b & 0x3f)
+    seen = seen + 1
+    if (seen === needed) {
+      out = out + (cp > 0xffff ? String.fromCodePoint(cp) : String.fromCharCode(cp))
+      cp = 0
+      needed = 0
+      seen = 0
     }
   }
+  // Cut off mid-sequence by the end of the range.
+  if (needed !== 0) out = out + REPLACEMENT
   return out
 }
 
