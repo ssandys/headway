@@ -139,6 +139,39 @@ test("utf8 decodes a 4-byte (astral) sequence", () => {
   assert.equal(decoded.length, 2, "an astral char is two UTF-16 units")
 })
 
+test("utf8 replaces an invalid lead byte instead of throwing (#18)", () => {
+  // Every lead byte >= 0xF0 used to be taken as a 4-byte sequence and handed
+  // to String.fromCodePoint unchecked, which throws RangeError above 0x10FFFF
+  // -- and Service.qml turns any decode throw into "feed unreachable", so one
+  // corrupt byte in any stop id or alert string discarded a whole good feed.
+  assert.equal(Gtfs.utf8(u8(0xff, 0x41, 0x41, 0x41), 0, 4), "\uFFFDAAA")
+  assert.equal(Gtfs.utf8(u8(0xf4, 0x90, 0x80, 0x80), 0, 4), "\uFFFD\uFFFD\uFFFD\uFFFD")
+})
+
+test("utf8 never reads past the end of its range (#18)", () => {
+  // A sequence cut off by the field's end is invalid, not a cue to borrow the
+  // next field's bytes. 0xE2 0x80 0x93 is an en dash; the range stops short.
+  assert.equal(Gtfs.utf8(u8(0x41, 0xe2, 0x80, 0x93), 0, 3), "A\uFFFD")
+})
+
+test("utf8 matches the WHATWG decoder byte for byte, on anything (#18)", () => {
+  // TextDecoder is the reference: the same replacement rules every browser
+  // uses. Random short strings biased toward the bytes that matter -- lead,
+  // continuation and invalid -- so the edge cases are hit thousands of times.
+  const ref = new TextDecoder("utf-8")
+  const pool = [0x00, 0x41, 0x7f, 0x80, 0x8f, 0x90, 0x9f, 0xa0, 0xbf, 0xc0,
+                0xc1, 0xc2, 0xdf, 0xe0, 0xe1, 0xed, 0xee, 0xef, 0xf0, 0xf1,
+                0xf3, 0xf4, 0xf5, 0xf8, 0xfe, 0xff]
+  let seed = 1
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
+  for (let k = 0; k < 20000; k++) {
+    const bytes = new Uint8Array(rand(9))
+    for (let i = 0; i < bytes.length; i++) bytes[i] = pool[rand(pool.length)]
+    assert.equal(Gtfs.utf8(bytes, 0, bytes.length), ref.decode(bytes),
+                 "differs on " + Array.from(bytes).map((b) => b.toString(16)).join(" "))
+  }
+})
+
 test("FEEDS covers all eight subway feeds", () => {
   assert.equal(Object.keys(Gtfs.FEEDS).length, 8)
 })

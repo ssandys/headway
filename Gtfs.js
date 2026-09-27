@@ -160,29 +160,83 @@ function walkFields(bytes, start, end, visit) {
   }
 }
 
-// QML's engine has no TextDecoder, so UTF-8 is decoded by hand.
+// QML's engine has no TextDecoder, so UTF-8 is decoded by hand -- to the same
+// rules TextDecoder follows (the WHATWG decoder), which tests/gtfs.test.js
+// checks it against on twenty thousand random byte strings.
+//
+// It NEVER THROWS (#18). An invalid byte becomes U+FFFD and decoding carries
+// on. The old decoder took every lead byte >= 0xF0 as four bytes and passed the
+// result to String.fromCodePoint unchecked, which throws above 0x10FFFF -- and
+// Service.qml turns any decode throw into "feed unreachable", so ONE corrupt
+// byte in any stop id or alert string discarded a feed that had returned 200
+// with good data. A string field is the wrong place to fail a whole feed.
+//
+// It also never reads past `end`. A sequence the range cuts short is invalid,
+// not a reason to borrow the next field's bytes, which the old decoder did.
+//
+// The shape is the spec's: a lead byte fixes how many continuation bytes
+// follow and the legal range of the FIRST of them (E0, ED, F0 and F4 narrow it,
+// which is what rules out overlong forms, surrogates and anything above
+// 0x10FFFF). A byte outside that range ends the sequence with one U+FFFD and
+// is then read again as a lead byte in its own right.
+var REPLACEMENT = String.fromCharCode(0xfffd)
+
 function utf8(bytes, start, end) {
   var out = ""
+  var cp = 0
+  var needed = 0
+  var seen = 0
+  var lower = 0x80
+  var upper = 0xbf
   var i = start
   while (i < end) {
-    var c = bytes[i]
-    if (c < 0x80) {
-      out = out + String.fromCharCode(c)
+    var b = bytes[i]
+    if (needed === 0) {
       i = i + 1
-    } else if (c < 0xe0) {
-      out = out + String.fromCharCode(((c & 0x1f) * 64) + (bytes[i + 1] & 0x3f))
-      i = i + 2
-    } else if (c < 0xf0) {
-      out = out + String.fromCharCode(
-        ((c & 0x0f) * 4096) + ((bytes[i + 1] & 0x3f) * 64) + (bytes[i + 2] & 0x3f))
-      i = i + 3
-    } else {
-      var cp = ((c & 0x07) * 262144) + ((bytes[i + 1] & 0x3f) * 4096) +
-               ((bytes[i + 2] & 0x3f) * 64) + (bytes[i + 3] & 0x3f)
-      out = out + String.fromCodePoint(cp)
-      i = i + 4
+      if (b < 0x80) {
+        out = out + String.fromCharCode(b)
+      } else if (b >= 0xc2 && b <= 0xdf) {
+        needed = 1
+        cp = b & 0x1f
+      } else if (b >= 0xe0 && b <= 0xef) {
+        if (b === 0xe0) lower = 0xa0
+        if (b === 0xed) upper = 0x9f
+        needed = 2
+        cp = b & 0x0f
+      } else if (b >= 0xf0 && b <= 0xf4) {
+        if (b === 0xf0) lower = 0x90
+        if (b === 0xf4) upper = 0x8f
+        needed = 3
+        cp = b & 0x07
+      } else {
+        out = out + REPLACEMENT
+      }
+      continue
+    }
+    if (b < lower || b > upper) {
+      // Not consumed: this byte starts over as a lead byte.
+      out = out + REPLACEMENT
+      cp = 0
+      needed = 0
+      seen = 0
+      lower = 0x80
+      upper = 0xbf
+      continue
+    }
+    i = i + 1
+    lower = 0x80
+    upper = 0xbf
+    cp = cp * 64 + (b & 0x3f)
+    seen = seen + 1
+    if (seen === needed) {
+      out = out + (cp > 0xffff ? String.fromCodePoint(cp) : String.fromCharCode(cp))
+      cp = 0
+      needed = 0
+      seen = 0
     }
   }
+  // Cut off mid-sequence by the end of the range.
+  if (needed !== 0) out = out + REPLACEMENT
   return out
 }
 
