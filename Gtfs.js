@@ -12,7 +12,20 @@
 // Varints are accumulated by MULTIPLICATION, not by `<<`. JavaScript's bitwise
 // operators truncate to 32 bits, and feed timestamps are ~1.79e9 seconds and
 // climbing -- a `<<`-based reader silently returns garbage for them.
-function readVarint(bytes, pos) {
+//
+// `end` bounds the read to the enclosing message (#27). Bounded by the buffer
+// alone, a varint inside a nested message read on into its PARENT's bytes and
+// the walk then ended quietly. Omitted, it is the buffer's end.
+//
+// At most ten bytes, which is all a 64-bit varint can be. Past that `scale`
+// reaches Infinity, `value` becomes NaN, and every `stop > end` check is false
+// for NaN -- so a run of continuation bytes silently dropped the rest of the
+// message instead of throwing.
+var VARINT_MAX_BYTES = 10
+
+function readVarint(bytes, pos, end) {
+  var limit = end === undefined ? bytes.length : end
+  var first = pos
   var value = 0
   var scale = 1
   for (;;) {
@@ -20,8 +33,11 @@ function readVarint(bytes, pos) {
     // `undefined & 0x80` is 0 -- so EOF reads as a valid terminator and the
     // function returns a plausible-looking wrong number instead of failing.
     // A truncated HTTP response is a realistic input here.
-    if (pos >= bytes.length) {
+    if (pos >= limit) {
       throw new Error("gtfs: varint runs past the end of the buffer")
+    }
+    if (pos - first >= VARINT_MAX_BYTES) {
+      throw new Error("gtfs: varint too long")
     }
     var b = bytes[pos]
     pos = pos + 1
@@ -35,13 +51,13 @@ function readVarint(bytes, pos) {
 // skipGroup -- walkFields needs the payload itself, so it does its own bounds
 // checks with field-specific messages.
 function skipValue(bytes, pos, end, wire) {
-  if (wire === 0) return readVarint(bytes, pos)[1]
+  if (wire === 0) return readVarint(bytes, pos, end)[1]
   if (wire === 1) {
     if (pos + 8 > end) throw new Error("gtfs: fixed64 runs past the end of the buffer")
     return pos + 8
   }
   if (wire === 2) {
-    var lp = readVarint(bytes, pos)
+    var lp = readVarint(bytes, pos, end)
     var stop = lp[1] + lp[0]
     if (stop > end) {
       throw new Error("gtfs: length-delimited field runs past the end of the buffer")
@@ -67,7 +83,7 @@ function skipGroup(bytes, pos, end, groupField) {
     if (pos >= end) {
       throw new Error("gtfs: unterminated group for field " + groupField)
     }
-    var tagPair = readVarint(bytes, pos)
+    var tagPair = readVarint(bytes, pos, end)
     pos = tagPair[1]
     var wire = tagPair[0] % 8
     if (wire === 3) {
@@ -86,17 +102,17 @@ function skipGroup(bytes, pos, end, groupField) {
 function walkFields(bytes, start, end, visit) {
   var pos = start
   while (pos < end) {
-    var tagPair = readVarint(bytes, pos)
+    var tagPair = readVarint(bytes, pos, end)
     var tag = tagPair[0]
     pos = tagPair[1]
     var field = Math.floor(tag / 8)
     var wire = tag % 8
     if (wire === 0) {
-      var v = readVarint(bytes, pos)
+      var v = readVarint(bytes, pos, end)
       pos = v[1]
       visit(field, wire, v[0], -1, -1)
     } else if (wire === 2) {
-      var lp = readVarint(bytes, pos)
+      var lp = readVarint(bytes, pos, end)
       pos = lp[1]
       var stop = pos + lp[0]
       // A declared length longer than the remaining buffer would otherwise

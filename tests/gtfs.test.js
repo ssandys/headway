@@ -41,6 +41,37 @@ test("readVarint refuses a varint that runs past the end of the buffer", () => {
   assert.throws(() => Gtfs.readVarint(u8(0x80, 0x80, 0x80), 0), /past the end/)
 })
 
+test("readVarint stops at the end it is given, not the end of the buffer (#27)", () => {
+  // A varint inside a nested message must not borrow its parent's bytes. The
+  // second byte here belongs to whatever follows the range.
+  assert.throws(() => Gtfs.readVarint(u8(0x81, 0x01), 0, 1), /past the end/)
+  assert.deepEqual(Gtfs.readVarint(u8(0x81, 0x01), 0, 2), [129, 2])
+})
+
+test("walkFields does not read a varint across its own end (#27)", () => {
+  // The issue's reproduction: field 1 = 129 used to be reported from a byte
+  // outside [0, 2), and the walk then ended quietly with no error.
+  assert.throws(() => Gtfs.walkFields(u8(0x08, 0x81, 0x01), 0, 2, () => {}), /past the end/)
+})
+
+test("a group's varint cannot run across the group's end either (#27)", () => {
+  // START_GROUP field 1, a varint field whose value continues past `end`.
+  const bytes = u8(0x0b, 0x10, 0x81, 0x01, 0x0c)
+  assert.throws(() => Gtfs.walkFields(bytes, 0, 3, () => {}), /past the end/)
+})
+
+test("readVarint refuses more than ten bytes (#27)", () => {
+  // A 64-bit varint is at most ten bytes. Past that the scale overflows to
+  // Infinity, the value becomes NaN, and `stop > end` is false for NaN -- so
+  // the rest of the message used to be dropped silently instead of throwing.
+  const long = new Uint8Array(12).fill(0x80)
+  long[11] = 0x01
+  assert.throws(() => Gtfs.readVarint(long, 0), /too long/)
+  const ten = new Uint8Array(10).fill(0x80)
+  ten[9] = 0x01
+  assert.equal(typeof Gtfs.readVarint(ten, 0)[0], "number", "ten bytes is still legal")
+})
+
 test("walkFields reports a varint field", () => {
   // field 3, wire 0, value 42  -> tag = 3<<3|0 = 24 = 0x18
   const seen = []
