@@ -143,6 +143,7 @@ Panel {
         // spell the word out, where there is room for it.
         text: Service.barState.badge
         color: Commons.Color.background
+        textFormat: Text.PlainText
         font.family: root.fontFamily
         font.bold: true
         font.pixelSize: Math.max(6, parent.height * 0.66)
@@ -226,6 +227,7 @@ Panel {
         Text {
           text: root.barIcon + "  Headway"
           color: root.barForeground
+          textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
           font.bold: true
@@ -238,6 +240,7 @@ Panel {
           text: Model.feedAgeText(Service.feedTimestamp, Service.nowSec,
                                   Service.staleAfterSec)
           color: root.dim
+          textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
@@ -256,6 +259,7 @@ Panel {
         Text {
           text: Service.station ? Service.station.name : ""
           color: root.barForeground
+          textFormat: Text.PlainText
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
         }
@@ -266,6 +270,7 @@ Panel {
             ? Model.directionLabelOf(Service.station, Service.saved.direction)
             : ""
           color: root.barForeground
+          textFormat: Text.PlainText
           opacity: 0.6
           font.pixelSize: Style.font.caption
         }
@@ -275,6 +280,7 @@ Panel {
         visible: !Service.ok
         text: "feed unreachable - " + Service.error
         color: Model.COLOR_ERROR
+        textFormat: Text.PlainText
         font.pixelSize: Style.font.caption
       }
 
@@ -305,6 +311,7 @@ Panel {
               return dest ? dest.name : ""
             }
             color: root.barForeground
+            textFormat: Text.PlainText
             opacity: 0.6
             font.pixelSize: Style.font.caption
             Layout.fillWidth: true
@@ -313,6 +320,7 @@ Panel {
           Text {
             text: Model.formatCountdown(arrivalRow.modelData.etaSec)
             color: root.barForeground
+            textFormat: Text.PlainText
             font.pixelSize: Style.font.body
           }
         }
@@ -322,6 +330,7 @@ Panel {
         visible: Service.ok && Service.arrivals.length === 0
         text: Service.saved ? "No trains scheduled" : "No station saved yet"
         color: root.barForeground
+        textFormat: Text.PlainText
         opacity: 0.6
         font.pixelSize: Style.font.caption
       }
@@ -709,6 +718,7 @@ Panel {
           Text {
             text: hit.modelData.name
             color: root.barForeground
+            textFormat: Text.PlainText
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
             // maximumWidth, not fillWidth: the bullets and the borough must
@@ -738,6 +748,7 @@ Panel {
             text: Stations.boroughName(hit.modelData.borough)
                   + "  " + Model.distanceText(hit.modelData.distanceKm)
             color: root.barForeground
+            textFormat: Text.PlainText
             opacity: 0.6
             font.pixelSize: Style.font.caption
             Layout.fillWidth: true
@@ -772,6 +783,7 @@ Panel {
         text: "r refresh   esc close"
         Layout.alignment: Qt.AlignHCenter
         color: root.barForeground
+        textFormat: Text.PlainText
         opacity: 0.6
         font.pixelSize: Style.font.caption
       }

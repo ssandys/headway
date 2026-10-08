@@ -54,6 +54,7 @@ Item {
     anchors.centerIn: parent
     text: Model.normalizeRoute(root.routeId)
     color: Model.routeTextColor(root.routeId)
+    textFormat: Text.PlainText
     font.family: root.fontFamily
     font.bold: true
     // Sized off the DISC, not the inscribed square, so the label stays the
