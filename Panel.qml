@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "."
 import "Model.js" as Model
@@ -115,12 +116,12 @@ Panel {
       width: Math.max(9, button.fontSize * 0.85)
       height: width
       radius: width / 2
-      color: Color.accent
+      color: Commons.Color.accent
       // The 1px ring separates the badge from the glyph underneath. Color
-      // .background, NOT Color.bar.background: the latter resolves through the
+      // .background, NOT Commons.Color.bar.background: the latter resolves through the
       // theme's bar.background-alpha, so on a translucent bar the ring itself
       // would go translucent and reintroduce the smear it exists to prevent.
-      borderSpec: Border.flat(Color.background, 1)
+      borderSpec: Border.flat(Commons.Color.background, 1)
 
       // glyphPaintedWidth, not labelWidth: BarIconButton sets labelVisible to
       // false and paints through OpticalGlyph, so labelWidth is 0 here and the
@@ -141,7 +142,7 @@ Panel {
         // returns a bullet for an arriving train; the panel rows below still
         // spell the word out, where there is room for it.
         text: Service.barState.badge
-        color: Color.background
+        color: Commons.Color.background
         font.family: root.fontFamily
         font.bold: true
         font.pixelSize: Math.max(6, parent.height * 0.66)
