@@ -1146,3 +1146,45 @@ test("a prototype-chain alert id is an ordinary one", () => {
   assert.deepEqual(ids(first.fresh), ["__proto__", "constructor"])
   assert.deepEqual(Model.alertNotifications(["6"], ["6"], alerts, NOW, first.seen).fresh, [])
 })
+
+// ---- notification bounds (omarchy-plugin-marketplace#12482) ----------------
+// One poll used to queue one notification per fresh alert, without limit.
+
+test("a few fresh alerts each get their own notification", () => {
+  const fresh = [liveAlert("a", ["6"]), liveAlert("b", ["6"], "No Scheduled Service")]
+  assert.deepEqual(Model.alertMessages(fresh), [
+    { summary: "Headway - Delays", body: "a" },
+    { summary: "Headway - No Scheduled Service", body: "b" }
+  ])
+})
+
+test("past the per-poll limit the rest collapse into one summary", () => {
+  const fresh = []
+  for (let i = 0; i < 5000; i++) fresh.push(liveAlert("x" + i, ["6"]))
+  const out = Model.alertMessages(fresh)
+  assert.equal(out.length, Model.MAX_ALERT_NOTIFICATIONS)
+  assert.deepEqual(out.slice(0, -1).map((m) => m.body), ["x0", "x1"])
+  const last = out[out.length - 1]
+  assert.equal(last.summary, "Headway")
+  assert.match(last.body, /4998 more/)
+})
+
+test("exactly the limit sends every alert individually", () => {
+  const fresh = []
+  for (let i = 0; i < Model.MAX_ALERT_NOTIFICATIONS; i++) fresh.push(liveAlert("y" + i, ["6"]))
+  assert.deepEqual(Model.alertMessages(fresh).map((m) => m.body), ["y0", "y1", "y2"])
+})
+
+test("enqueueNotifications appends in one step and never exceeds the cap", () => {
+  const q = [{ summary: "s", body: "1" }]
+  const out = Model.enqueueNotifications(q, [{ summary: "s", body: "2" }])
+  assert.deepEqual(out.map((m) => m.body), ["1", "2"])
+  assert.deepEqual(q.map((m) => m.body), ["1"], "the queue passed in is not mutated")
+  const many = []
+  for (let i = 0; i < 100; i++) many.push({ summary: "s", body: String(i) })
+  const capped = Model.enqueueNotifications(out, many)
+  assert.equal(capped.length, Model.MAX_NOTIFY_QUEUE)
+  assert.deepEqual(capped.slice(0, 2).map((m) => m.body), ["1", "2"],
+                   "what was already waiting is kept; the overflow is what drops")
+  assert.equal(Model.enqueueNotifications(capped, many).length, Model.MAX_NOTIFY_QUEUE)
+})

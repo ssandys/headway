@@ -557,3 +557,20 @@ test("the fixture's real descriptions all sit under the cap", () => {
   const cut = feed.alerts.filter((a) => a.descriptionText.endsWith("…"))
   assert.equal(cut.length, 0, "no real alert in the fixture is truncated")
 })
+
+// Marketplace review of 0.3.1 (omarchy-plugin-marketplace#12482): nothing but
+// the 4 MiB byte cap bounded how many alerts a feed could yield, and a hostile
+// feed of tiny entities fits tens of thousands. The real feed carries ~200.
+// Concatenated protobuf messages merge their repeated fields, so the fixture
+// repeated is a valid feed with that many times the alerts.
+test("decodeAlerts keeps at most MAX_ALERTS alerts", () => {
+  const one = fixture("alerts.pb")
+  const per = Gtfs.decodeAlerts(one).alerts.length
+  const copies = Math.ceil((Gtfs.MAX_ALERTS + 1) / per)
+  const big = new Uint8Array(one.length * copies)
+  for (let i = 0; i < copies; i++) big.set(one, i * one.length)
+  const feed = Gtfs.decodeAlerts(big)
+  assert.ok(per * copies > Gtfs.MAX_ALERTS, "the feed really is over the cap")
+  assert.equal(feed.alerts.length, Gtfs.MAX_ALERTS)
+  assert.ok(Gtfs.MAX_ALERTS >= 10 * per, "the cap leaves a real feed untouched, with room")
+})
