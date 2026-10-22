@@ -835,10 +835,9 @@ Item {
     root.seenAlertIds = decision.seen
     root.trackedRoutes = routes
     if (!root.notifyRouteAlert) return
-    for (var i = 0; i < decision.fresh.length; i++) {
-      var a = decision.fresh[i]
-      root.notify("Headway - " + a.alertType, a.headerText || "")
-    }
+    // One batch, bounded, rather than a notify() per fresh alert
+    // (omarchy-plugin-marketplace#12482).
+    root.notifyAll(Model.alertMessages(decision.fresh))
   }
 
   function checkStale() {
@@ -893,9 +892,14 @@ Item {
   }
 
   function notify(summary, body) {
-    var queued = root.notifyQueue.slice()
-    queued.push({ summary: summary, body: body })
-    root.notifyQueue = queued
+    root.notifyAll([{ summary: summary, body: body }])
+  }
+
+  // The whole batch joins the queue in one copy, and the queue is capped:
+  // Model.enqueueNotifications says why and how.
+  function notifyAll(messages) {
+    if (!messages || messages.length === 0) return
+    root.notifyQueue = Model.enqueueNotifications(root.notifyQueue, messages)
     sendNextNotification()
   }
 

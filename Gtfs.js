@@ -462,6 +462,12 @@ function decodeAlert(bytes, start, end) {
   }
 }
 
+// The real alerts feed carries about 200. Only the 4 MiB byte cap bounded this
+// before, and a hostile feed of tiny entities fits tens of thousands, every one
+// of which the notification diff then walks (omarchy-plugin-marketplace#12482).
+// Ten times the real count, so a busy day is never cut short.
+var MAX_ALERTS = 2000
+
 function decodeAlerts(bytes) {
   var result = { timestamp: 0, alerts: [] }
   if (!bytes || bytes.length === 0) return result
@@ -471,6 +477,7 @@ function decodeAlerts(bytes) {
         if (hf === 3 && hw === 0) result.timestamp = hv
       })
     } else if (f === 2 && w === 2) {
+      if (result.alerts.length >= MAX_ALERTS) return
       var id = ""
       var body = null
       walkFields(bytes, s, e, function (ef, ew, ev, es, ee) {
@@ -496,6 +503,7 @@ if (typeof module !== "undefined") {
     feedsForRoutes: feedsForRoutes,
     feedUrl: feedUrl,
     ALERTS_URL: ALERTS_URL,
+    MAX_ALERTS: MAX_ALERTS,
     decodeTripUpdates: decodeTripUpdates,
     decodeAlerts: decodeAlerts
   }

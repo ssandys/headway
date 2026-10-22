@@ -237,6 +237,41 @@ function alertNotifications(routes, knownRoutes, alerts, nowSec, seen) {
   return { fresh: fresh, seen: next }
 }
 
+// What one poll's fresh alerts become as notifications. It used to be one each,
+// without limit, so a feed full of new alerts was a flood
+// (omarchy-plugin-marketplace#12482). Up to the limit, every alert keeps its
+// own; past it, the last slot says how many more there are.
+var MAX_ALERT_NOTIFICATIONS = 3
+
+function alertMessages(fresh) {
+  var list = fresh || []
+  var out = []
+  var individual = list.length > MAX_ALERT_NOTIFICATIONS
+    ? MAX_ALERT_NOTIFICATIONS - 1 : list.length
+  for (var i = 0; i < individual; i++) {
+    out.push({ summary: "Headway - " + list[i].alertType, body: list[i].headerText || "" })
+  }
+  if (list.length > individual) {
+    out.push({ summary: "Headway",
+               body: (list.length - individual) + " more alerts on your routes." })
+  }
+  return out
+}
+
+// A new queue, never the one passed in: QML only notices a var property change
+// on reassignment. One copy per batch rather than per message, and the queue
+// never grows past the cap -- what is already waiting is kept, and the overflow
+// is what drops. A poll sends at most MAX_ALERT_NOTIFICATIONS plus one stale
+// notice, so the cap is only ever reached by notify-send not keeping up.
+var MAX_NOTIFY_QUEUE = 8
+
+function enqueueNotifications(queue, items) {
+  var out = (queue || []).slice(0, MAX_NOTIFY_QUEUE)
+  var add = items || []
+  for (var i = 0; i < add.length && out.length < MAX_NOTIFY_QUEUE; i++) out.push(add[i])
+  return out
+}
+
 // The saved route an alert belongs to, or "" when it cannot be attributed.
 // Normalizes both sides, so a 6X alert lands on the 6.
 function matchedRouteOf(routes, alert) {
@@ -801,6 +836,10 @@ if (typeof module !== "undefined") {
     clampInt: clampInt,
     routesOfStations: routesOfStations,
     alertNotifications: alertNotifications,
+    MAX_ALERT_NOTIFICATIONS: MAX_ALERT_NOTIFICATIONS,
+    alertMessages: alertMessages,
+    MAX_NOTIFY_QUEUE: MAX_NOTIFY_QUEUE,
+    enqueueNotifications: enqueueNotifications,
     normalizeRoute: normalizeRoute,
     isExpress: isExpress,
     dedupeTrips: dedupeTrips,

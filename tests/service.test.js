@@ -439,3 +439,22 @@ test("a station no feed serves says so, instead of keeping the last status (#19)
     " && Service.arrivals.length === 0 && Service.feedTimestamp === 0")
   assert.equal(r.code, 0, "the no-feed station was not reported\n" + r.out)
 })
+
+// omarchy-plugin-marketplace#12482: one poll full of fresh alerts used to
+// queue one notification each, copying the whole queue per alert. Driven
+// through the real checkNewAlerts: the first poll tracks the route, the second
+// brings 10000 new alerts on it. notify-send cannot spawn here (empty PATH),
+// so the first message is taken at once and the rest wait in the queue.
+test("a poll full of fresh alerts queues a bounded batch, not one per alert", { skip }, () => {
+  const r = runService(
+    "Service.attach({});" +
+    " Service.stations = [{ routes: ['6'] }];" +
+    " Service.alertsArrived([]);" +
+    " var many = [];" +
+    " for (var i = 0; i < 10000; i++) many.push({ id: 'x' + i, alertType: 'Delays'," +
+    "   routes: ['6'], periods: [], headerText: 'x' + i });" +
+    " Service.alertsArrived(many);" +
+    " root.idleMs = Service.notifyQueue.length",
+    "root.idleMs === 2")
+  assert.equal(r.code, 0, "the queue was not the bounded batch\n" + r.out)
+})
