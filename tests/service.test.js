@@ -458,3 +458,30 @@ test("a poll full of fresh alerts queues a bounded batch, not one per alert", { 
     "root.idleMs === 2")
   assert.equal(r.code, 0, "the queue was not the bounded batch\n" + r.out)
 })
+
+// Marketplace review of 0.3.2: one alert carrying 100000 distinct route
+// selectors -- about 1 MiB, well under feedByteLimit -- was deduplicated with
+// indexOf over a growing array inside absorbAlerts, quadratic work on the
+// shared shell thread. Driven through the real absorbAlerts with the bytes
+// built in the engine itself: under 0.3.2 this outlived the 30 s spawn
+// timeout; now it decodes in well under a second, keeping MAX_SELECTORS_PER_ALERT.
+test("one alert with 100000 distinct selectors decodes quickly and is capped", { skip }, () => {
+  const r = runService(
+    "Service.attach({});" +
+    " function varint(out, n) { while (n > 127) { out.push((n & 127) | 128); n = Math.floor(n / 128) } out.push(n) }" +
+    " function field(out, f, payload) { varint(out, f * 8 + 2); varint(out, payload.length);" +
+    "   for (var j = 0; j < payload.length; j++) out.push(payload[j]) }" +
+    " function str(s) { var b = []; for (var j = 0; j < s.length; j++) b.push(s.charCodeAt(j)); return b }" +
+    " var body = [];" +
+    " for (var i = 0; i < 100000; i++) { var sel = []; field(sel, 2, str('r' + i)); field(body, 5, sel) }" +
+    " var entity = []; field(entity, 1, str('many')); field(entity, 5, body);" +
+    " var feed = []; field(feed, 2, entity);" +
+    " var bytes = new Uint8Array(feed);" +
+    " var t0 = Date.now();" +
+    " Service.absorbAlerts(bytes.buffer);" +
+    " root.idleMs = Date.now() - t0",
+    "root.idleMs >= 0 && root.idleMs < 2000 && Service.alerts.length === 1" +
+    " && Service.alerts[0].routes.length === 100 && Service.alerts[0].routes[0] === 'r0'",
+    3000)
+  assert.equal(r.code, 0, "the selector flood was not decoded quickly and capped\n" + r.out)
+})

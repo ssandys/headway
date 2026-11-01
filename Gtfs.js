@@ -424,11 +424,24 @@ function translatedText(bytes, start, end, limit) {
   return boundText(preferred || first, limit)
 }
 
+// Route selectors kept per alert. The busiest alert in tests/fixtures/alerts.pb
+// names 21 routes, and the whole system has fewer than 40 route ids, so a real
+// alert never comes near this. Before 0.3.3 every selector was kept and
+// deduplicated with indexOf over the growing list: one alert of 100000
+// distinct selectors -- about 1 MiB, under the 4 MiB cap and untouched by
+// MAX_ALERTS -- took 15 s in node and outlived a 30 s timeout in the shell.
+// The dedupe is now a keyed lookup, and this bounds what alertsFor and
+// matchedRouteOf later walk for every alert on every poll.
+var MAX_SELECTORS_PER_ALERT = 100
+
 function decodeAlert(bytes, start, end) {
   var headerText = ""
   var descriptionText = ""
   var alertType = ""
   var routes = []
+  // Keyed "r:" + route, never bare: a "__proto__" route would otherwise hit the
+  // prototype setter and its duplicate would survive (CONTRIBUTING).
+  var seenRoutes = {}
   var periods = []
   walkFields(bytes, start, end, function (f, w, v, s, e) {
     if (f === 1 && w === 2) {
@@ -441,8 +454,11 @@ function decodeAlert(bytes, start, end) {
     } else if (f === 5 && w === 2) {
       walkFields(bytes, s, e, function (sf, sw, sv, ss, se) {
         if (sf !== 2 || sw !== 2) return
-        var route = utf8(bytes, ss, se)
-        if (routes.indexOf(route) < 0) routes.push(route)
+        if (routes.length >= MAX_SELECTORS_PER_ALERT) return
+        var key = "r:" + utf8(bytes, ss, se)
+        if (Object.prototype.hasOwnProperty.call(seenRoutes, key)) return
+        seenRoutes[key] = true
+        routes.push(key.substring(2))
       })
     } else if (f === 10 && w === 2 && !headerText) {
       headerText = translatedText(bytes, s, e, ALERT_TEXT_LIMIT)
@@ -504,6 +520,7 @@ if (typeof module !== "undefined") {
     feedUrl: feedUrl,
     ALERTS_URL: ALERTS_URL,
     MAX_ALERTS: MAX_ALERTS,
+    MAX_SELECTORS_PER_ALERT: MAX_SELECTORS_PER_ALERT,
     decodeTripUpdates: decodeTripUpdates,
     decodeAlerts: decodeAlerts
   }
