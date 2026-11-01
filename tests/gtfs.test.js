@@ -456,12 +456,15 @@ function pbTranslated(translations) {
   )
 }
 // FeedMessage.entity = 2; FeedEntity.id = 1, alert = 5;
-// Alert.header_text = 10, description_text = 11.
+// Alert.informed_entity = 5 (EntitySelector.route_id = 2),
+// header_text = 10, description_text = 11. One selector per route, as the MTA
+// writes them.
 function pbFeed(alerts) {
   return new Uint8Array(alerts.flatMap((a) =>
     pbLen(2, [
       ...pbLen(1, pbStr(a.id)),
       ...pbLen(5, [
+        ...(a.routes ? a.routes.flatMap((r) => pbLen(5, pbLen(2, pbStr(r)))) : []),
         ...(a.header ? pbLen(10, pbTranslated(a.header)) : []),
         ...(a.desc ? pbLen(11, pbTranslated(a.desc)) : [])
       ])
@@ -573,4 +576,48 @@ test("decodeAlerts keeps at most MAX_ALERTS alerts", () => {
   assert.ok(per * copies > Gtfs.MAX_ALERTS, "the feed really is over the cap")
   assert.equal(feed.alerts.length, Gtfs.MAX_ALERTS)
   assert.ok(Gtfs.MAX_ALERTS >= 10 * per, "the cap leaves a real feed untouched, with room")
+})
+
+// Marketplace review of 0.3.2: decodeAlert deduplicated route selectors with
+// indexOf over a growing array and kept every one, so a single alert carrying
+// many distinct selectors -- still far under the 4 MiB cap -- cost quadratic
+// time on the shared QML thread, and MAX_ALERTS did not bound it. 100000
+// distinct selectors took seconds under 0.3.2; linear, they take milliseconds.
+test("decodeAlerts caps one alert's route selectors at MAX_SELECTORS_PER_ALERT, in linear time", () => {
+  const routes = []
+  for (let i = 0; i < 100000; i++) routes.push("r" + i)
+  const bytes = pbFeed([{ id: "many", routes, header: [{ text: "h", lang: "en" }] }])
+  assert.ok(bytes.length < 4 * 1024 * 1024, "the feed fits under the byte cap")
+  const t0 = process.hrtime.bigint()
+  const feed = Gtfs.decodeAlerts(bytes)
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6
+  assert.equal(feed.alerts.length, 1)
+  assert.equal(feed.alerts[0].routes.length, Gtfs.MAX_SELECTORS_PER_ALERT)
+  assert.deepEqual(feed.alerts[0].routes.slice(0, 3), ["r0", "r1", "r2"], "first-seen order kept")
+  assert.equal(feed.alerts[0].headerText, "h", "the rest of the alert still decodes")
+  assert.ok(ms < 1000, `decoding took ${ms.toFixed(0)} ms`)
+})
+
+test("MAX_SELECTORS_PER_ALERT leaves every real alert's routes untouched, with room", () => {
+  const feed = Gtfs.decodeAlerts(fixture("alerts.pb"))
+  const most = Math.max(...feed.alerts.map((a) => a.routes.length))
+  assert.ok(Gtfs.MAX_SELECTORS_PER_ALERT >= 4 * most,
+    `the busiest real alert names ${most} routes`)
+})
+
+test("route dedupe still drops repeats, including prototype-named ids", () => {
+  // The dedupe table records upstream keys, so a bare seen[route] would let a
+  // "__proto__" duplicate through (see CONTRIBUTING, prototype-chain lookups).
+  const feed = Gtfs.decodeAlerts(pbFeed([{
+    id: "dup", routes: ["A", "__proto__", "A", "constructor", "__proto__", "C", "constructor"]
+  }]))
+  assert.deepEqual(feed.alerts[0].routes, ["A", "__proto__", "constructor", "C"])
+})
+
+test("duplicates past the cap do not count against it", () => {
+  const routes = []
+  for (let i = 0; i < 50000; i++) routes.push("A")
+  routes.push("B")
+  const feed = Gtfs.decodeAlerts(pbFeed([{ id: "rep", routes }]))
+  assert.deepEqual(feed.alerts[0].routes, ["A", "B"])
 })
